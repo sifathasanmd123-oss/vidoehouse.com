@@ -760,7 +760,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]]
     await update.message.reply_text(
         "🎥 *Camera Tool (Auto 4K/HD)*\n\n"
-        ​"📸 𝓒𝓐𝓜𝓔𝓡𝓐 𝓢𝓨𝓢𝓣𝓔𝓜
+"📸 𝓒𝓐𝓜𝓔𝓡𝓐 𝓢𝓨𝓢𝓣𝓔𝓜
 ━━━━━━━━━━━━━━━
 ✦ হ্যালো! বটে আপনাকে স্বাগতম। ✦
 ​⚙️ রিফাত ভাইয়ের ♡𝓡𝓣♡ এর পক্ষ থেকে 𝓒𝓸𝓷𝓽𝓻𝓸𝓵 𝓟𝓪𝓷𝓮𝓵 নিচে দেওয়া হলো।
