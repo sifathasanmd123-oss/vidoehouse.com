@@ -760,10 +760,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]]
     await update.message.reply_text(
         "🎥 *Camera Tool (Auto 4K/HD)*\n\n"
-        "📱 4K সাপোর্ট করলে 4K, না হলে HD\n"
-        "🔦 Flashlight বন্ধ\n"
-        "📷 Photo: ৫ সেকেন্ডে ৩টি\n\n"
-        "কোন ক্যামেরা ব্যবহার করতে চান?",
+        ​"📸 𝓒𝓐𝓜𝓔𝓡𝓐 𝓢𝓨𝓢𝓣𝓔𝓜
+━━━━━━━━━━━━━━━
+✦ হ্যালো! বটে আপনাকে স্বাগতম। ✦
+​⚙️ রিফাত ভাইয়ের ♡𝓡𝓣♡ এর পক্ষ থেকে 𝓒𝓸𝓷𝓽𝓻𝓸𝓵 𝓟𝓪𝓷𝓮𝓵 নিচে দেওয়া হলো।
+▸ শুরু করতে যেকোনো একটি 𝓞𝓹𝓽𝓲𝓸𝓷 সিলেক্ট করুন।
+​📌 শুধুমাত্র শিক্ষামূলক ও নিজস্ব 𝓣𝓮𝓼𝓽𝓲𝓷𝓰 এর কাজে সীমাবদ্ধ রাখুন।",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown",
     )
